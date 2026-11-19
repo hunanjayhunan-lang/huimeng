@@ -15,6 +15,19 @@ import {
 } from 'lucide-react';
 import './ScriptsPage.css';
 import { api } from '../api.js';
+import { PRESET_SCRIPT } from './workspaceDemo.js';
+
+const WORKSPACE_FEATURED_SCRIPT = {
+  id: 'ws-script-rain-alley',
+  title: PRESET_SCRIPT.title,
+  source: '工作台项目',
+  chars: PRESET_SCRIPT.excerpt.replace(/\s+/g, '').length,
+  scenes: 3,
+  fileName: '雨巷迷踪_EP01.md',
+  excerpt: PRESET_SCRIPT.excerpt,
+  createdLabel: '关联项目 · 《雨巷迷踪》第1季',
+  workspaceProjectId: 'proj-rain-alley',
+};
 
 const SOURCES = ['原创', '改编', '转载', '其他'];
 const ACCEPT = '.docx,.txt,.md,.csv';
@@ -75,7 +88,7 @@ const toView = item => ({
 });
 
 export default function ScriptsPage({ onOpenShots, projectId }) {
-  const [scripts, setScripts] = useState([]);
+  const [scripts, setScripts] = useState([WORKSPACE_FEATURED_SCRIPT]);
   const [modalOpen, setModalOpen] = useState(false);
   const [pasteOpen, setPasteOpen] = useState(false);
   const [title, setTitle] = useState('');
@@ -166,7 +179,7 @@ export default function ScriptsPage({ onOpenShots, projectId }) {
   useEffect(() => {
     let cancelled = false;
     api.listScripts(projectId)
-      .then(data => { if (!cancelled) setScripts(data.items.map(toView)); })
+      .then(data => { if (!cancelled) setScripts([WORKSPACE_FEATURED_SCRIPT, ...data.items.map(toView)]); })
       .catch(err => { if (!cancelled) setError(err.message); });
     return () => { cancelled = true; };
   }, [projectId]);
@@ -308,8 +321,12 @@ export default function ScriptsPage({ onOpenShots, projectId }) {
             <span><Film size={14} />{item.scenes ? `${item.scenes} 个分镜` : '切分镜中'}</span>
           </div>
           <div className="script-actions">
-            <button className="open-shots" onClick={() => onOpenShots?.()}>查看分镜</button>
-            <button className="icon-btn" aria-label={`删除${item.title}`} onClick={() => removeScript(item)}><Trash2 size={16} /></button>
+            <button className="open-shots" onClick={() => onOpenShots?.(item.workspaceProjectId || 'proj-rain-alley')}>
+              {item.workspaceProjectId ? '在工作台打开' : '查看分镜'}
+            </button>
+            {!item.workspaceProjectId && (
+              <button className="icon-btn" aria-label={`删除${item.title}`} onClick={() => removeScript(item)}><Trash2 size={16} /></button>
+            )}
           </div>
         </article>)}
       </div>

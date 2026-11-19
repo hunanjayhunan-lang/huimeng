@@ -1312,3 +1312,32 @@ h1 {
   display: flex;
   gap: 12px;
 }
+
+/* 统一外壳（admin workspace）后：工作台内容区不再需要为旧浮动侧栏让位 */
+.admin-workspace .main-content {
+  margin: 20px 28px 0 0;
+}
+.admin-workspace .projects-page,
+.admin-workspace .agents-page,
+.admin-workspace .data-page,
+.admin-workspace .dist-page,
+.admin-workspace .decompose-page,
+.admin-workspace .scripts-page,
+.admin-workspace .assets-page,
+.admin-workspace .videos-page,
+.admin-workspace .canvas-list-page {
+  margin-left: 0;
+}
+/* 旧 topbar 高度（76px）换成统一外壳顶栏（57px）后，全高布局相应收紧 */
+.admin-workspace .agents-page {
+  height: calc(100vh - 78px);
+}
+@media (max-width: 600px) {
+  .admin-workspace .main-content {
+    margin: 18px 10px 0;
+  }
+  .admin-workspace .agents-page {
+    height: auto;
+    min-height: calc(100vh - 160px);
+  }
+}

@@ -17,6 +17,7 @@ import {
   X,
 } from 'lucide-react';
 import './AssetsPage.css';
+import { ASSET_NODES, DEMO_PROJECTS, GROUP_META } from './workspaceDemo.js';
 import girlDog from '../assets/people/girl-dog.png';
 import p1 from '../assets/people/p1.jpg';
 import p2 from '../assets/people/p2.jpg';
@@ -43,7 +44,7 @@ import propPouch from '../assets/assets/prop-pouch.png';
 import propClapperBoard from '../assets/assets/prop-clapper-board.png';
 import propWoodenDoor from '../assets/assets/prop-wooden-door.png';
 
-const CATEGORIES = ['人物', '场景', '道具', '生图', '生图任务', 'BGM'];
+const CATEGORIES = ['人物', '场景', '道具'];
 const COLLECTION_TABS = ['人物', '场景', '道具'];
 const ROLES = ['主角', '配角', '反派', '龙套'];
 const GENDERS = ['男', '女', '其他'];
@@ -89,6 +90,34 @@ const INITIAL_ASSETS = {
     { id: 'o-5', name: '打板器', alias: '场记板', tags: ['剧组', '工具', '片头', '现代'], badge: '', creator: '丁向豪', time: '2 天前', script: '未关联剧本', prompt: '黑色场记板，黑白斜条纹，打开状态，剧组工作台面，顶部柔光', cover: propClapperBoard, rank: 4 },
     { id: 'o-6', name: '老木门', alias: '门板', tags: ['木质', '古风', '场景件', '铜环'], badge: '后山洞口', creator: 'Aa112233..', time: '3 天前', script: '《后山洞口》', prompt: '古旧木门，双开铜环把手，中央挂锁，门缝透出暖光，木纹清晰', cover: propWoodenDoor, rank: 5 },
   ],
+};
+
+// 工作区（画布）产出的资产图：人物三视图 / 道具图 / 场景底板
+// 资产库默认展示工作区里生成的这些资产，而非内置的演示数据。
+const GROUP_TO_CATEGORY = { character: '人物', prop: '道具', place: '场景' };
+const workspaceAssets = () => {
+  const result = { 人物: [], 场景: [], 道具: [] };
+  const cursor = { 人物: 0, 场景: 0, 道具: 0 };
+  ASSET_NODES.forEach(node => {
+    const category = GROUP_TO_CATEGORY[node.group];
+    if (!category) return;
+    result[category].push({
+      id: node.id,
+      name: node.name,
+      alias: GROUP_META[node.group]?.label || '',
+      tags: [node.sub],
+      badges: ['工作区'],
+      badge: node.sub,
+      creator: '工作区',
+      time: '刚刚',
+      script: '《雨巷迷踪》',
+      projectId: 'proj-rain-alley',
+      prompt: node.prompt,
+      cover: node.img,
+      rank: cursor[category]++,
+    });
+  });
+  return result;
 };
 
 const GENERATION_GROUPS = [
@@ -348,9 +377,10 @@ function BgmModule({ groups, playing, favorites, onPlay, onFavorite }) {
 
 export default function AssetsPage({ projectId }) {
   const [category, setCategory] = useState('人物');
-  const [assets, setAssets] = useState(INITIAL_ASSETS);
+  const [assets, setAssets] = useState(() => ({ ...INITIAL_ASSETS, ...workspaceAssets() }));
   const [query, setQuery] = useState('');
   const [sort, setSort] = useState('recent');
+  const [projectFilter, setProjectFilter] = useState(projectId || '');
   const [creatorFilter, setCreatorFilter] = useState('');
   const [scriptFilter, setScriptFilter] = useState('');
   const [tagFilter, setTagFilter] = useState('');
@@ -369,8 +399,8 @@ export default function AssetsPage({ projectId }) {
 
   const isCollection = COLLECTION_TABS.includes(category);
   const isPerson = category === '人物';
-  const list = (assets[category] || []).filter(item => !projectId || item.projectId === projectId);
-  const filtersActive = Boolean(query.trim() || creatorFilter || scriptFilter || tagFilter);
+  const list = (assets[category] || []).filter(item => !projectFilter || item.projectId === projectFilter);
+  const filtersActive = Boolean(query.trim() || projectFilter || creatorFilter || scriptFilter || tagFilter);
 
   // 剧本下拉：固定选项 + 各分类数据里实际出现过的剧本（去重）
   const scriptChoices = useMemo(() => {
@@ -457,6 +487,7 @@ export default function AssetsPage({ projectId }) {
 
   const resetFilters = () => {
     setQuery('');
+    setProjectFilter('');
     setCreatorFilter('');
     setScriptFilter('');
     setTagFilter('');
@@ -690,6 +721,33 @@ export default function AssetsPage({ projectId }) {
             />
             {query && <button type="button" className="search-clear" aria-label="清空搜索" onClick={() => setQuery('')}><X size={13} /></button>}
           </label>
+
+          <div className="asset-filter">
+            <button
+              type="button"
+              className={`filter-btn ${openMenu === 'project' ? 'open' : ''}`}
+              onClick={() => setOpenMenu(openMenu === 'project' ? '' : 'project')}
+              aria-expanded={openMenu === 'project'}
+            >
+              <span className="filter-value">{projectFilter ? (DEMO_PROJECTS.find(p => p.id === projectFilter)?.name || '项目') : '全部项目'}</span>
+              <ChevronDown size={15} />
+            </button>
+            {openMenu === 'project' && <div className="asset-menu">
+              <button type="button" className={!projectFilter ? 'selected' : ''} onClick={() => { setProjectFilter(''); setOpenMenu(''); }}>
+                全部项目
+                {!projectFilter && <Check size={14} />}
+              </button>
+              {DEMO_PROJECTS.map(project => <button
+                key={project.id}
+                type="button"
+                className={projectFilter === project.id ? 'selected' : ''}
+                onClick={() => { setProjectFilter(project.id); setOpenMenu(''); }}
+              >
+                {project.name}
+                {projectFilter === project.id && <Check size={14} />}
+              </button>)}
+            </div>}
+          </div>
 
           <div className="asset-filter asset-sort">
             <button

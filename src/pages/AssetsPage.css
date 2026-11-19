@@ -136,6 +136,7 @@
   justify-content: space-between;
   gap: 28px;
   margin-top: 20px;
+  z-index: 2;
 }
 
 .assets-section-head {
