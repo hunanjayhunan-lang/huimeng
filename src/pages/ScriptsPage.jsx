@@ -15,7 +15,7 @@ import {
 } from 'lucide-react';
 import './ScriptsPage.css';
 import { api } from '../api.js';
-import { PRESET_SCRIPT } from './workspaceDemo.js';
+import { DEMO_PROJECTS, PRESET_SCRIPT } from './workspaceDemo.js';
 
 const WORKSPACE_FEATURED_SCRIPT = {
   id: 'ws-script-rain-alley',
@@ -84,11 +84,19 @@ const toView = item => ({
   scenes: item.scenes || 0,
   fileName: item.fileName || '',
   excerpt: item.excerpt || '',
+  projectId: item.projectId || item.workspaceProjectId || '',
   createdLabel: relative(item.createdAt || Date.now()),
 });
 
 export default function ScriptsPage({ onOpenShots, projectId }) {
   const [scripts, setScripts] = useState([WORKSPACE_FEATURED_SCRIPT]);
+  const [query, setQuery] = useState('');
+  const [sourceFilter, setSourceFilter] = useState('all');
+  const [projFilter, setProjFilter] = useState(projectId || 'all');
+
+  useEffect(() => {
+    setProjFilter(projectId || 'all');
+  }, [projectId]);
   const [modalOpen, setModalOpen] = useState(false);
   const [pasteOpen, setPasteOpen] = useState(false);
   const [title, setTitle] = useState('');
@@ -275,34 +283,78 @@ export default function ScriptsPage({ onOpenShots, projectId }) {
     setError('');
   };
 
-  return <main className="scripts-page">
-    <section className="scripts-hero">
-      <h1>
-        剧本库
-        <span className="hero-divider" aria-hidden="true" />
-        <em>剧本入，成片出</em>
-      </h1>
-      <p>上传后自动切好分镜，再拆资产、铺提示词卡片，到分镜工作台逐张确认出片。</p>
-    </section>
+  const visibleScripts = scripts.filter(item => {
+    if (sourceFilter !== 'all' && item.source !== sourceFilter) return false;
+    if (projFilter !== 'all') {
+      const pid = item.workspaceProjectId || item.projectId || 'proj-rain-alley';
+      if (pid !== projFilter) return false;
+    }
+    if (query.trim()) {
+      const q = query.trim();
+      if (!item.title.includes(q) && !(item.excerpt || '').includes(q)) return false;
+    }
+    return true;
+  });
 
-    {scripts.length === 0 ? <section className="scripts-empty">
-      <CloudMark />
-      <h2>还没有剧本</h2>
-      <p>支持 .docx / .txt / .md / .csv，也可以直接粘贴文本。</p>
-      <div className="empty-actions">
-        <button className="primary" onClick={() => openModal('upload')}>上传剧本</button>
-        <button className="secondary" onClick={() => openModal('paste')}>粘贴文本</button>
+  return <div className="ws-shell">
+    <header className="ws-header">
+      <div className="ws-header-left">
+        <span className="ws-project"><FileText size={14} /> 剧本库</span>
       </div>
-    </section> : <section className="scripts-collection">
-      <div className="collection-head">
-        <h2>我的剧本 <span className="count">{scripts.length}</span></h2>
-        <div className="collection-actions">
-          <button onClick={() => openModal('upload')}><Upload size={15} />上传剧本</button>
-          <button onClick={() => openModal('paste')}><Clipboard size={15} />粘贴文本</button>
+      <div className="ws-header-right">
+        <input
+          className="ws-hub-search"
+          value={query}
+          onChange={e => setQuery(e.target.value)}
+          placeholder="搜索剧本名称或内容…"
+        />
+        <button type="button" className="ws-btn" onClick={() => openModal('upload')}><Upload size={13} /> 上传剧本</button>
+        <button type="button" className="ws-btn primary" onClick={() => openModal('paste')}><Clipboard size={13} /> 粘贴文本</button>
+      </div>
+    </header>
+    <div className="ws-page-body">
+    <main className="scripts-page">
+      <div className="ws-hub-head">
+        <div>
+          <h2>我的剧本</h2>
+        </div>
+        <div className="ws-hub-filters">
+          <div className="ws-hub-tabs" role="tablist">
+            {[
+              ['all', '全部剧本'],
+              ['工作台项目', '工作台项目'],
+              ['原创', '原创'],
+              ['改编', '改编'],
+            ].map(([key, label]) => (
+              <button
+                key={key}
+                type="button"
+                className={sourceFilter === key ? 'active' : ''}
+                onClick={() => setSourceFilter(key)}
+              >
+                {label}
+              </button>
+            ))}
+          </div>
+          <select
+            className="ws-hub-style-select"
+            value={projFilter}
+            onChange={e => setProjFilter(e.target.value)}
+            aria-label="按项目筛选"
+          >
+            <option value="all">全部项目</option>
+            {DEMO_PROJECTS.map(p => <option key={p.id} value={p.id}>{p.name}</option>)}
+          </select>
+          <span className="ws-hub-count">共 {visibleScripts.length} 个剧本</span>
         </div>
       </div>
+
+    {visibleScripts.length === 0 ? <div className="ws-hub-empty">
+      <b>{scripts.length === 0 ? '还没有剧本' : '没有匹配的剧本'}</b>
+      <p>{scripts.length === 0 ? '支持 .docx / .txt / .md / .csv，也可以直接粘贴文本。' : '调整项目筛选或搜索关键词试试。'}</p>
+    </div> : <section className="scripts-collection">
       <div className="script-list">
-        {scripts.map(item => <article className="script-row" key={item.id}>
+        {visibleScripts.map(item => <article className="script-row" key={item.id}>
           <div className="script-icon"><FileText size={20} /></div>
           <div className="script-main">
             <div className="script-title-line">
@@ -431,5 +483,7 @@ export default function ScriptsPage({ onOpenShots, projectId }) {
     </div>}
 
     {toast && <div className="scripts-toast" role="status"><Check size={16} />{toast}</div>}
-  </main>;
+  </main>
+  </div>
+  </div>;
 }

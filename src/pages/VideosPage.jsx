@@ -36,7 +36,7 @@ function idFromHash() {
   return matched ? decodeURIComponent(matched[1]) : null;
 }
 
-function VideoCard({ task, view, onOpen, onCopy, onDownload }) {
+function VideoCard({ task, view, onOpen }) {
   const state = viewOf(task.status);
   const tone = TONES[task.type] || TONES.image;
   return <article className={`video-card ${view}`} onClick={onOpen} tabIndex={0} role="button"
@@ -53,20 +53,13 @@ function VideoCard({ task, view, onOpen, onCopy, onDownload }) {
       {state === 'processing' && <span className="thumb-progress"><i style={{ width: `${task.progress}%` }} /></span>}
     </div>
     <div className="video-card-body">
-      <h3>{titleOf(task)}</h3>
-      <p className="video-card-prompt">{task.prompt}</p>
-      <div className="video-card-meta">
-        <span>{task.type === 'video' ? '视频' : '图片'}</span><i />
-        <span>{task.reqKey}</span>
+      <div className="video-card-title">
+        <h3>{titleOf(task)}</h3>
         <span className="video-card-time"><Clock size={12} />{timeText(task.createdAt)}</span>
       </div>
+      <p className="video-card-prompt">{task.prompt}</p>
       {state === 'failed' && <div className="video-card-error"><AlertTriangle size={14} />{task.error || '生成失败'}</div>}
       {state === 'processing' && <div className="video-card-progress"><i style={{ width: `${task.progress}%` }} />{task.progress}%</div>}
-      <div className="video-card-actions">
-        <button type="button" onClick={event => { event.stopPropagation(); onCopy(task); }}><Copy size={15} />复制提示词</button>
-        <button type="button" disabled={state !== 'done' || !task.resultUrl}
-          onClick={event => { event.stopPropagation(); onDownload(task); }}><Download size={15} />下载</button>
-      </div>
     </div>
   </article>;
 }
@@ -221,7 +214,6 @@ export default function VideosPage({ onCreate, projectId }) {
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState('');
   const [query, setQuery] = useState('');
-  const [typeFilter, setTypeFilter] = useState('all');
   const [status, setStatus] = useState('all');
   const [view, setView] = useState('grid');
   const [selectedId, setSelectedId] = useState(idFromHash);
@@ -248,7 +240,7 @@ export default function VideosPage({ onCreate, projectId }) {
     let cancelled = false;
     const load = async () => {
       try {
-        const data = await api.listTasks({ limit: 60, projectId });
+        const data = await api.listTasks({ limit: 60 });
         if (cancelled) return;
         setTasks(data.items);
         setError('');
@@ -271,12 +263,12 @@ export default function VideosPage({ onCreate, projectId }) {
   }, [selectedId]);
 
   const visible = useMemo(() => tasks.filter(task => {
+    if (task.type !== 'video') return false;
     const keyword = query.trim();
     const hitKeyword = !keyword || (task.prompt || '').includes(keyword);
-    const hitType = typeFilter === 'all' || task.type === typeFilter;
     const hitStatus = status === 'all' || viewOf(task.status) === status;
-    return hitKeyword && hitType && hitStatus;
-  }), [tasks, query, typeFilter, status]);
+    return hitKeyword && hitStatus;
+  }), [tasks, query, status]);
 
   const copyPrompt = async task => {
     try {
@@ -343,17 +335,52 @@ export default function VideosPage({ onCreate, projectId }) {
     {selected ? <main className="videos-page detail-view">
       <TaskDetail task={selected} onBack={() => setSelectedId(null)} onCopy={copyPrompt}
         onDownload={downloadTask} onRetry={() => retryTask(selected)} onDelete={() => deleteTask(selected)} busy={busy} />
-    </main> : <main className="videos-page">
-      <div className="page-heading">
-        <div>
-          <h1>成片</h1>
-          <p>每一条出片的进度与结果都在这里。卡片上可以直接预览、下载、复制提示词。</p>
+    </main> : <div className="ws-shell">
+      <header className="ws-header">
+        <div className="ws-header-left">
+          <span className="ws-project"><Video size={14} /> 成片库</span>
         </div>
-        <div className="page-actions">
-          <button type="button" onClick={() => setRefreshKey(key => key + 1)}><RefreshCw size={16} />刷新</button>
-          <button type="button" onClick={() => { setComposeError(''); setComposeOpen(true); }}><Plus size={17} />新建生成任务</button>
+        <div className="ws-header-right">
+          <input
+            className="ws-hub-search"
+            value={query}
+            onChange={event => setQuery(event.target.value)}
+            placeholder="搜索提示词内容…"
+          />
+          <button type="button" className="ws-btn primary" onClick={() => { setComposeError(''); setComposeOpen(true); }}><Plus size={14} /> 新建生成任务</button>
         </div>
-      </div>
+      </header>
+      <div className="ws-page-body">
+        <main className="videos-page">
+          <div className="ws-hub-head">
+            <div>
+              <h2>我的成片</h2>
+            </div>
+            <div className="ws-hub-filters">
+              <div className="ws-hub-tabs" role="tablist">
+                {statuses.map(([label, value]) => (
+                  <button
+                    key={value}
+                    type="button"
+                    className={status === value ? 'active' : ''}
+                    onClick={() => setStatus(value)}
+                  >
+                    {label}
+                  </button>
+                ))}
+              </div>
+              <select
+                className="ws-hub-style-select"
+                value={view}
+                onChange={e => setView(e.target.value)}
+                aria-label="切换视图"
+              >
+                <option value="grid">网格视图</option>
+                <option value="list">列表视图</option>
+              </select>
+              <span className="ws-hub-count">共 {visible.length} 个成片</span>
+            </div>
+          </div>
 
       {error && <div className="data-banner">
         <AlertTriangle size={16} />
@@ -361,37 +388,10 @@ export default function VideosPage({ onCreate, projectId }) {
         <button type="button" onClick={() => setRefreshKey(key => key + 1)}>重试</button>
       </div>}
 
-      <section className="video-search">
-        <label className="search-box">
-          <input value={query} onChange={event => setQuery(event.target.value)} placeholder="搜索提示词内容" />
-          <Search size={19} />
-        </label>
-        <label className="model-select">
-          <select value={typeFilter} onChange={event => setTypeFilter(event.target.value)}>
-            <option value="all">全部类型</option>
-            <option value="image">图片</option>
-            <option value="video">视频</option>
-          </select>
-          <ChevronDown size={16} />
-        </label>
-      </section>
-
-      <div className="video-toolbar">
-        <div className="status-tabs">
-          {statuses.map(([label, value], index) => <button type="button" key={value} onClick={() => setStatus(value)} className={status === value ? 'current' : ''}>
-            {index > 0 && <i className={`status-dot dot-${value}`} />}{label}
-          </button>)}
-        </div>
-        <div className="view-switch">
-          <button type="button" aria-label="网格视图" onClick={() => setView('grid')} className={view === 'grid' ? 'current' : ''}><GridIcon /></button>
-          <button type="button" aria-label="列表视图" onClick={() => setView('list')} className={view === 'list' ? 'current' : ''}><ListIcon /></button>
-        </div>
-      </div>
-
       {loading ? <div className="video-loading"><Loader2 size={20} className="spin" />正在读取任务…</div>
         : visible.length ? <div className={`video-results ${view}`}>
           {visible.map(task => <VideoCard key={task.id} task={task} view={view}
-            onOpen={() => setSelectedId(task.id)} onCopy={copyPrompt} onDownload={downloadTask} />)}
+            onOpen={() => setSelectedId(task.id)} />)}
         </div>
           : <section className="video-empty">
             <div className="cloud-mark">⌁</div>
@@ -399,7 +399,9 @@ export default function VideosPage({ onCreate, projectId }) {
             <p>{tasks.length === 0 ? '提交一条生成任务，进度和成片会出现在这里。' : '换个关键词或筛选条件试试。'}</p>
             {tasks.length === 0 && <button type="button" className="primary" onClick={() => { setComposeError(''); setComposeOpen(true); }}><Sparkles size={17} />新建生成任务</button>}
           </section>}
-    </main>}
+        </main>
+      </div>
+    </div>}
 
     {composeOpen && <ComposeDialog onClose={() => setComposeOpen(false)} onSubmit={submitTask} submitting={submitting} error={composeError} />}
     {toast && <div className="copy-toast"><Check size={16} />{toast}</div>}

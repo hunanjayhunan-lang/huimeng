@@ -10,6 +10,9 @@ import {
   PanelLeft,
   Bot,
   Layers,
+  ChevronDown,
+  ChevronRight,
+  FolderKanban,
 } from 'lucide-react';
 import './style.css';
 import AdminWorkspace from './components/AdminWorkspace.jsx';
@@ -23,6 +26,7 @@ import ProjectsPage from './pages/ProjectsPage.jsx';
 import CreateWorkbench from './pages/CreateWorkbench.jsx';
 import DistributePage from './pages/DistributePage.jsx';
 import WorkspacePage from './pages/WorkspacePage.jsx';
+import { DEMO_PROJECTS } from './pages/workspaceDemo.js';
 import HomeDashboard from './pages/HomeDashboard.jsx';
 import AdminPage from './pages/AdminPage.jsx';
 import SuperadminPage from './pages/SuperadminPage.jsx';
@@ -105,7 +109,13 @@ function App() {
   const [activeTab, setActiveTab] = useState(tabFromPath);
   const [session, setSession] = useState(null);
   const [sessionReady, setSessionReady] = useState(false);
-  const [selectedProject, setSelectedProject] = useState(null);
+  const [selectedProject, setSelectedProject] = useState(() => {
+    const m = window.location.pathname.match(/^\/app\/workspace\/projects\/([^/]+)/);
+    const pid = m ? decodeURIComponent(m[1]) : new URLSearchParams(window.location.search).get('project');
+    return DEMO_PROJECTS.find(p => p.id === pid) || null;
+  });
+  const [expandedProjects, setExpandedProjects] = useState(() => [DEMO_PROJECTS[0].id]);
+  const [projectsOpen, setProjectsOpen] = useState(true);
   const [creationMode, setCreationMode] = useState('剧本成片');
 
   // 切 tab = pushState：浏览器前进/后退、刷新、直接贴 URL 都能用
@@ -190,7 +200,79 @@ function App() {
       navLabel="工作台"
       tabs={navItems.map(({ icon, label }) => ({ key: label, label, icon }))}
       activeTab={activeTab}
-      onTabChange={navigate}
+      onTabChange={tab => {
+        setSelectedProject(null);
+        navigate(tab);
+      }}
+      sidebarExtra={
+        <div className="ws-nav-projects">
+          <button
+            type="button"
+            className="ws-nav-projects-head"
+            style={{ width: '100%', border: 0, background: 'transparent', cursor: 'pointer' }}
+            onClick={() => setProjectsOpen(o => !o)}
+          >
+            <span>Projects</span>
+            {projectsOpen ? <ChevronDown size={13} /> : <ChevronRight size={13} />}
+          </button>
+          {projectsOpen && DEMO_PROJECTS.map(proj => {
+            const expanded = expandedProjects.includes(proj.id);
+            const isProjActive = selectedProject?.id === proj.id;
+            const toggleProj = () => setExpandedProjects(list => (
+              list.includes(proj.id) ? list.filter(id => id !== proj.id) : [...list, proj.id]
+            ));
+            const openSub = (tab, path) => {
+              setSelectedProject(proj);
+              setActiveTab(tab);
+              if (window.location.pathname + window.location.search !== path) {
+                window.history.pushState({ tab }, '', path);
+              }
+              window.scrollTo({ top: 0 });
+            };
+            return (
+              <div key={proj.id} className="ws-nav-proj-group">
+                <button type="button" className="ws-nav-proj-btn" onClick={toggleProj}>
+                  <FolderKanban size={14} />
+                  <span title={proj.name}>{proj.name}</span>
+                  {expanded ? <ChevronDown size={13} /> : <ChevronRight size={13} />}
+                </button>
+                {expanded && (
+                  <div className="ws-nav-proj-children">
+                    <button
+                      type="button"
+                      className={`ws-nav-sub ${isProjActive && activeTab === '工作台' ? 'selected' : ''}`}
+                      onClick={() => openSub('工作台', `/app/workspace/projects/${encodeURIComponent(proj.id)}`)}
+                    >
+                      <Layers size={14} /> 制作工作台
+                    </button>
+                    <button
+                      type="button"
+                      className={`ws-nav-sub ${isProjActive && activeTab === '剧本' ? 'selected' : ''}`}
+                      onClick={() => openSub('剧本', `/app/scripts?project=${encodeURIComponent(proj.id)}`)}
+                    >
+                      <FileText size={14} /> 剧本
+                    </button>
+                    <button
+                      type="button"
+                      className={`ws-nav-sub ${isProjActive && activeTab === '资产' ? 'selected' : ''}`}
+                      onClick={() => openSub('资产', `/app/assets?project=${encodeURIComponent(proj.id)}`)}
+                    >
+                      <ImageIcon size={14} /> 资产
+                    </button>
+                    <button
+                      type="button"
+                      className={`ws-nav-sub ${isProjActive && activeTab === '成片' ? 'selected' : ''}`}
+                      onClick={() => openSub('成片', `/app/videos?project=${encodeURIComponent(proj.id)}`)}
+                    >
+                      <Video size={14} /> 成片
+                    </button>
+                  </div>
+                )}
+              </div>
+            );
+          })}
+        </div>
+      }
       breadcrumbParent="工作台"
       user={session.user}
       org={session.org}

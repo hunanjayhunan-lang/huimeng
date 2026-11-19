@@ -381,6 +381,10 @@ export default function AssetsPage({ projectId }) {
   const [query, setQuery] = useState('');
   const [sort, setSort] = useState('recent');
   const [projectFilter, setProjectFilter] = useState(projectId || '');
+
+  useEffect(() => {
+    setProjectFilter(projectId || '');
+  }, [projectId]);
   const [creatorFilter, setCreatorFilter] = useState('');
   const [scriptFilter, setScriptFilter] = useState('');
   const [tagFilter, setTagFilter] = useState('');
@@ -657,212 +661,76 @@ export default function AssetsPage({ projectId }) {
     setEditing(null);
   };
 
-  return <main className="assets-page">
-    <div className="assets-decor" aria-hidden="true">
-      <div className="assets-warm-glow" />
-      <svg className="assets-disc-svg" viewBox="0 0 1930 924" preserveAspectRatio="none">
-        <defs>
-          <linearGradient id="assetDisc" x1="0" y1="0" x2="1" y2="0">
-            <stop offset="0%" stopColor="#8f8670" stopOpacity=".18" />
-            <stop offset="10%" stopColor="#8f8670" stopOpacity=".29" />
-            <stop offset="100%" stopColor="#8a8170" stopOpacity=".34" />
-          </linearGradient>
-        </defs>
-        <path
-          d="M1930 0 L1930 924 L1730 924 C1793 700 1838 350 1884 0 Z"
-          fill="url(#assetDisc)"
-        />
-      </svg>
-      <svg className="assets-gold-svg" viewBox="0 0 1930 924" preserveAspectRatio="none">
-        <path d="M-20 366 C 82 346 168 306 258 204" stroke="#c8a753" strokeWidth="1.4" fill="none" opacity=".72" />
-        <path d="M1638 172 C 1768 206 1858 300 1913 396" stroke="#c8a753" strokeWidth="1.4" fill="none" opacity=".7" />
-        <circle cx="1864" cy="320" r="7.5" stroke="#c8a753" strokeWidth="1.4" fill="none" opacity=".8" />
-        <path d="M1864 328 L1864 486" stroke="#c8a753" strokeWidth="1.1" fill="none" opacity=".4" />
-      </svg>
-    </div>
-
-    <section className="assets-hero">
-      <h1>资产库</h1>
-      <p>默认只显示你自己创建的资产；组长设为公开的会一并出现，可直接使用但不能修改。</p>
-    </section>
-
-    <nav className="asset-tabs" role="tablist" aria-label="资产分类">
-      {CATEGORIES.map(name => <button
-        key={name}
-        type="button"
-        role="tab"
-        aria-selected={category === name}
-        className={`asset-tab ${category === name ? 'active' : ''}`}
-        onClick={() => switchCategory(name)}
-      >
-        {name}
-      </button>)}
-    </nav>
-
-    {isCollection ? <>
-      <section className="assets-section">
-        <div className="assets-section-head">
-          <h2>{category}资产 <span className="asset-count">{countLabel}</span></h2>
-          <p>{category === '人物'
-            ? '对标漫剧工作流：性别 / 年龄 / 体型 / 面部 / 外形拆开写，肖像和服装参考分开存。'
-            : category === '场景'
-              ? '一场一张主场景图，标注时间、天气和机位，分镜引用时直接挂过去。'
-              : '道具单独存卡，记录材质、尺寸和剧情作用，避免同一件东西前后对不上。'}</p>
-        </div>
-
-        <div className="assets-toolbar" ref={toolbarRef}>
-          <label className="asset-search">
-            <Search size={17} />
+  return <div className="ws-shell">
+    <header className="ws-header">
+      <div className="ws-header-left">
+        <span className="ws-project"><ImagePlus size={14} /> 资产库</span>
+      </div>
+      <div className="ws-header-right">
+        {isCollection && (
+          <>
             <input
+              className="ws-hub-search"
               value={query}
               onChange={event => setQuery(event.target.value)}
-              placeholder="搜索名称 / 别名 / 标签"
+              placeholder="搜索名称 / 别名 / 标签…"
               aria-label="搜索资产"
             />
-            {query && <button type="button" className="search-clear" aria-label="清空搜索" onClick={() => setQuery('')}><X size={13} /></button>}
-          </label>
-
-          <div className="asset-filter">
-            <button
-              type="button"
-              className={`filter-btn ${openMenu === 'project' ? 'open' : ''}`}
-              onClick={() => setOpenMenu(openMenu === 'project' ? '' : 'project')}
-              aria-expanded={openMenu === 'project'}
-            >
-              <span className="filter-value">{projectFilter ? (DEMO_PROJECTS.find(p => p.id === projectFilter)?.name || '项目') : '全部项目'}</span>
-              <ChevronDown size={15} />
+            <button type="button" className="ws-btn primary" onClick={openCreate}>
+              <Plus size={14} /> 新建{category}
             </button>
-            {openMenu === 'project' && <div className="asset-menu">
-              <button type="button" className={!projectFilter ? 'selected' : ''} onClick={() => { setProjectFilter(''); setOpenMenu(''); }}>
-                全部项目
-                {!projectFilter && <Check size={14} />}
-              </button>
-              {DEMO_PROJECTS.map(project => <button
-                key={project.id}
-                type="button"
-                className={projectFilter === project.id ? 'selected' : ''}
-                onClick={() => { setProjectFilter(project.id); setOpenMenu(''); }}
-              >
-                {project.name}
-                {projectFilter === project.id && <Check size={14} />}
-              </button>)}
-            </div>}
-          </div>
-
-          <div className="asset-filter asset-sort">
-            <button
-              type="button"
-              className={`filter-btn ${openMenu === 'sort' ? 'open' : ''}`}
-              onClick={() => setOpenMenu(openMenu === 'sort' ? '' : 'sort')}
-              aria-expanded={openMenu === 'sort'}
-            >
-              <span className="filter-label">排序</span>
-              <span className="filter-value">{SORT_OPTIONS.find(option => option.value === sort)?.label}</span>
-              <ChevronDown size={15} />
-            </button>
-            {openMenu === 'sort' && <div className="asset-menu">
-              {SORT_OPTIONS.map(option => <button
-                key={option.value}
-                type="button"
-                className={sort === option.value ? 'selected' : ''}
-                onClick={() => { setSort(option.value); setOpenMenu(''); }}
-              >
-                {option.label}
-                {sort === option.value && <Check size={14} />}
-              </button>)}
-            </div>}
-          </div>
-
-          <div className="asset-filter">
-            <button
-              type="button"
-              className={`filter-btn ${openMenu === 'creator' ? 'open' : ''}`}
-              onClick={() => setOpenMenu(openMenu === 'creator' ? '' : 'creator')}
-              aria-expanded={openMenu === 'creator'}
-            >
-              <span className="filter-value">{creatorFilter || '创建人'}</span>
-              <ChevronDown size={15} />
-            </button>
-            {openMenu === 'creator' && <div className="asset-menu">
-              <button type="button" className={!creatorFilter ? 'selected' : ''} onClick={() => { setCreatorFilter(''); setOpenMenu(''); }}>
-                全部创建人
-                {!creatorFilter && <Check size={14} />}
-              </button>
-              {CREATOR_OPTIONS.map(name => <button
-                key={name}
-                type="button"
-                className={creatorFilter === name ? 'selected' : ''}
-                onClick={() => { setCreatorFilter(name); setOpenMenu(''); }}
-              >
-                {name}
-                {creatorFilter === name && <Check size={14} />}
-              </button>)}
-            </div>}
-          </div>
-
-          <div className="asset-filter">
-            <button
-              type="button"
-              className={`filter-btn ${openMenu === 'script' ? 'open' : ''}`}
-              onClick={() => setOpenMenu(openMenu === 'script' ? '' : 'script')}
-              aria-expanded={openMenu === 'script'}
-            >
-              <span className="filter-value">{scriptFilter ? scriptFilter.replace(/[《》]/g, '') : '剧本'}</span>
-              <ChevronDown size={15} />
-            </button>
-            {openMenu === 'script' && <div className="asset-menu">
-              <button type="button" className={!scriptFilter ? 'selected' : ''} onClick={() => { setScriptFilter(''); setOpenMenu(''); }}>
-                全部剧本
-                {!scriptFilter && <Check size={14} />}
-              </button>
-              <button type="button" className={scriptFilter === '未关联剧本' ? 'selected' : ''} onClick={() => { setScriptFilter('未关联剧本'); setOpenMenu(''); }}>
-                未关联剧本
-                {scriptFilter === '未关联剧本' && <Check size={14} />}
-              </button>
-              {scriptChoices.filter(option => option !== '未关联剧本').map(name => <button
-                key={name}
-                type="button"
-                className={scriptFilter === name ? 'selected' : ''}
-                onClick={() => { setScriptFilter(name); setOpenMenu(''); }}
-              >
-                {name}
-                {scriptFilter === name && <Check size={14} />}
-              </button>)}
-            </div>}
-          </div>
-
-          <div className="asset-filter">
-            <button
-              type="button"
-              className={`filter-btn ${openMenu === 'tag' ? 'open' : ''}`}
-              onClick={() => setOpenMenu(openMenu === 'tag' ? '' : 'tag')}
-              aria-expanded={openMenu === 'tag'}
-            >
-              <span className="filter-value">{tagFilter || '标签'}</span>
-              <ChevronDown size={15} />
-            </button>
-            {openMenu === 'tag' && <div className="asset-menu">
-              <button type="button" className={!tagFilter ? 'selected' : ''} onClick={() => { setTagFilter(''); setOpenMenu(''); }}>
-                全部标签
-                {!tagFilter && <Check size={14} />}
-              </button>
-              {tagChoices.map(tag => <button
-                key={tag}
-                type="button"
-                className={tagFilter === tag ? 'selected' : ''}
-                onClick={() => { setTagFilter(tag); setOpenMenu(''); }}
-              >
-                {tag}
-                {tagFilter === tag && <Check size={14} />}
-              </button>)}
-            </div>}
-          </div>
-
-          <button type="button" className="asset-primary" onClick={openCreate}>
-            <Plus size={17} /> 新建{category}
-          </button>
+          </>
+        )}
+      </div>
+    </header>
+    <div className="ws-page-body">
+    <main className="assets-page">
+      <div className="ws-hub-head">
+        <div>
+          <h2>我的资产</h2>
         </div>
-      </section>
+        <div className="ws-hub-filters">
+          <div className="ws-hub-tabs" role="tablist" aria-label="资产分类">
+            {CATEGORIES.map(name => (
+              <button
+                key={name}
+                type="button"
+                role="tab"
+                aria-selected={category === name}
+                className={category === name ? 'active' : ''}
+                onClick={() => switchCategory(name)}
+              >
+                {name}
+              </button>
+            ))}
+          </div>
+          {isCollection && (
+            <>
+              <select
+                className="ws-hub-style-select"
+                value={projectFilter}
+                onChange={e => setProjectFilter(e.target.value)}
+                aria-label="按项目筛选"
+              >
+                <option value="">全部项目</option>
+                {DEMO_PROJECTS.map(p => <option key={p.id} value={p.id}>{p.name}</option>)}
+              </select>
+              <select
+                className="ws-hub-style-select"
+                value={sort}
+                onChange={e => setSort(e.target.value)}
+                aria-label="排序方式"
+              >
+                {SORT_OPTIONS.map(o => <option key={o.value} value={o.value}>{o.label}</option>)}
+              </select>
+              <span className="ws-hub-count">共 {countLabel}</span>
+            </>
+          )}
+        </div>
+      </div>
+
+    {isCollection ? <>
+      
 
       {visible.length > 0 ? <div className="asset-grid">
         {visible.map(item => <article
@@ -1073,5 +941,7 @@ export default function AssetsPage({ projectId }) {
     </div>}
 
     {toast && <div className="asset-toast" role="status"><Check size={16} />{toast}</div>}
-  </main>;
+  </main>
+  </div>
+  </div>;
 }

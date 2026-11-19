@@ -33,6 +33,7 @@ export default function AdminWorkspace({
   onNavigate,
   collapsed: collapsedProp,
   onCollapsedChange,
+  sidebarExtra,
   children,
 }) {
   const [collapsedState, setCollapsedState] = useState(false);
@@ -75,6 +76,8 @@ export default function AdminWorkspace({
             );
           })}
         </nav>
+
+        {!collapsed && sidebarExtra}
 
         <div className="admin-workspace-foot">
           <span className={`platform-dot ${statusOk ? '' : 'offline'}`} />

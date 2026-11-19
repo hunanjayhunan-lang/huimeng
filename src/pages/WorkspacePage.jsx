@@ -3,6 +3,8 @@ import { ReactFlow, Background, Controls, Handle, Position } from '@xyflow/react
 import '@xyflow/react/dist/style.css';
 import {
   AlertTriangle,
+  Archive,
+  ArchiveRestore,
   ArrowLeft,
   ArrowRight,
   Check,
@@ -17,6 +19,7 @@ import {
   Loader2,
   Lock,
   Maximize2,
+  MoreHorizontal,
   PanelLeft,
   PanelRight,
   PenTool,
@@ -27,6 +30,7 @@ import {
   ShieldAlert,
   ShieldCheck,
   Sparkles,
+  Star,
   Upload,
   Wand2,
   Wrench,
@@ -34,6 +38,7 @@ import {
 } from 'lucide-react';
 import { Toast, useToast } from '../components/AdminWorkspace.jsx';
 import {
+  AI_SCRIPT_YAML,
   ASSET_NODES,
   BREAKDOWN,
   COVER_PRESETS,
@@ -41,6 +46,7 @@ import {
   GROUP_META,
   IDEA_EXAMPLE,
   PRESET_SCRIPT,
+  PROJECT_METADATA,
   RECOMMENDED_STYLE,
   STAGES,
   STYLES,
@@ -590,6 +596,9 @@ export default function WorkspacePage({ role } = {}) {
   const [projects, setProjects] = useState(DEMO_PROJECTS);
   const [activeProjectId, setActiveProjectId] = useState(initialPid || DEMO_PROJECTS[0].id);
   const [projectQuery, setProjectQuery] = useState('');
+  const [hubStatusFilter, setHubStatusFilter] = useState('active'); // active | progress | done | archived
+  const [hubStyleFilter, setHubStyleFilter] = useState('all');
+  const [menuFor, setMenuFor] = useState(null); // 打开“...”菜单的项目 id
   const [newProjOpen, setNewProjOpen] = useState(false);
   const [newProj, setNewProj] = useState({ title: '', desc: '', cover: '', genre: '悬疑短剧', styleKey: 'noir' });
   const [newProjError, setNewProjError] = useState('');
@@ -622,6 +631,7 @@ export default function WorkspacePage({ role } = {}) {
   const [scriptTitle, setScriptTitle] = useState(PRESET_SCRIPT.title);
   const [scriptMeta, setScriptMeta] = useState(PRESET_SCRIPT.meta);
   const [scriptModalOpen, setScriptModalOpen] = useState(() => new URLSearchParams(window.location.search).get('openScript') === '1');
+  const [scriptViewMode, setScriptViewMode] = useState('human'); // human | yaml
   const [scriptEditing, setScriptEditing] = useState(false);
   const [highlightOn, setHighlightOn] = useState(true);
   const [saving, setSaving] = useState(false);
@@ -830,8 +840,9 @@ export default function WorkspacePage({ role } = {}) {
   const allPass = ASSET_NODES.every(n => assets[n.id]?.status === 'pass');
   const anyBusy = ASSET_NODES.some(n => ['generating', 'retrying', 'checking', 'queued'].includes(assets[n.id]?.status));
 
-  const openScriptReader = () => {
+  const openScriptReader = (mode = 'human') => {
     setScriptDraft(scriptText);
+    setScriptViewMode(mode);
     setScriptEditing(true);
     setScriptModalOpen(true);
   };
@@ -1396,9 +1407,42 @@ export default function WorkspacePage({ role } = {}) {
     </div>
   );
 
+  const toggleArchive = proj => {
+    const nextArchived = !proj.archived;
+    setProjects(prev => prev.map(p => (p.id === proj.id ? { ...p, archived: nextArchived } : p)));
+    showToast(nextArchived ? `已归档「${proj.name}」` : `已恢复「${proj.name}」`);
+  };
+
+  const toggleFavorite = proj => {
+    const nextFavorite = !proj.favorite;
+    setProjects(prev => prev.map(p => (p.id === proj.id ? { ...p, favorite: nextFavorite } : p)));
+    showToast(nextFavorite ? `已收藏「${proj.name}」` : `已取消收藏「${proj.name}」`);
+  };
+
+  // 点击卡片外的区域关闭“...”菜单
+  useEffect(() => {
+    const close = e => { if (!e.target.closest('.ws-hub-menu-wrap')) setMenuFor(null); };
+    if (menuFor) { document.addEventListener('mousedown', close); return () => document.removeEventListener('mousedown', close); }
+  }, [menuFor]);
+
   /* ---------- 渲染 ---------- */
   if (view === 'hub') {
-    const visibleProjects = projects.filter(p => !projectQuery.trim() || p.name.includes(projectQuery.trim()) || p.genre.includes(projectQuery.trim()));
+    const archivedCount = projects.filter(p => p.archived).length;
+    const visibleProjects = projects.filter(p => {
+      if (hubStatusFilter === 'archived') {
+        if (!p.archived) return false;
+      } else {
+        if (p.archived) return false;
+        if (hubStatusFilter === 'progress' && p.stageIndex >= 4) return false;
+        if (hubStatusFilter === 'done' && p.stageIndex < 4) return false;
+      }
+      if (hubStyleFilter !== 'all' && p.styleKey !== hubStyleFilter) return false;
+      if (projectQuery.trim()) {
+        const q = projectQuery.trim();
+        if (!p.name.includes(q) && !p.genre.includes(q)) return false;
+      }
+      return true;
+    });
     return (
       <div className="ws-shell">
         <header className="ws-header">
@@ -1433,47 +1477,85 @@ export default function WorkspacePage({ role } = {}) {
             <div>
               <h2>我的项目</h2>
             </div>
-            <span className="ws-hub-count">共 {visibleProjects.length} 个项目</span>
+            <div className="ws-hub-filters">
+              <div className="ws-hub-tabs" role="tablist">
+                {[
+                  ['active', '全部项目'],
+                  ['progress', '进行中'],
+                  ['done', '已完成'],
+                  ['archived', `已归档 (${archivedCount})`],
+                ].map(([key, label]) => (
+                  <button
+                    key={key}
+                    type="button"
+                    className={hubStatusFilter === key ? 'active' : ''}
+                    onClick={() => setHubStatusFilter(key)}
+                  >
+                    {label}
+                  </button>
+                ))}
+              </div>
+              <select
+                className="ws-hub-style-select"
+                value={hubStyleFilter}
+                onChange={e => setHubStyleFilter(e.target.value)}
+                aria-label="按风格筛选"
+              >
+                <option value="all">全部风格</option>
+                {STYLES.map(s => <option key={s.key} value={s.key}>{s.name}</option>)}
+              </select>
+              <span className="ws-hub-count">共 {visibleProjects.length} 个项目</span>
+            </div>
           </div>
 
-          <div className="ws-hub-grid">
-            {visibleProjects.map(proj => (
-              <article key={proj.id} className="ws-hub-card" onClick={() => openProject(proj)}>
-                <div className="ws-hub-cover">
-                  <img src={proj.cover} alt={proj.name} />
-                  <span className="ws-hub-genre">{proj.genre}</span>
-                  <span className="ws-hub-status">{proj.statusText}</span>
-                </div>
-                <div className="ws-hub-body">
-                  <div className="ws-hub-title">
-                    <b>{proj.name}</b>
-                    <small>{proj.updatedAt}</small>
+          {visibleProjects.length === 0 ? (
+            <div className="ws-hub-empty">
+              <b>{hubStatusFilter === 'archived' ? '暂无已归档项目' : '没有匹配的项目'}</b>
+              <p>{hubStatusFilter === 'archived' ? '在项目卡片右下角点击「归档」可收纳不再活跃的项目' : '调整筛选条件或新建一个项目'}</p>
+            </div>
+          ) : (
+            <div className="ws-hub-grid">
+              {visibleProjects.map(proj => (
+                <article key={proj.id} className={`ws-hub-card ${proj.archived ? 'archived' : ''}`} onClick={() => openProject(proj)}>
+                  <div className="ws-hub-cover">
+                    <img src={proj.cover} alt={proj.name} />
+                    <div className="ws-hub-menu-wrap" onClick={e => e.stopPropagation()}>
+                      <button
+                        type="button"
+                        className="ws-hub-menu-btn"
+                        aria-label="项目菜单"
+                        onClick={() => setMenuFor(menuFor === proj.id ? null : proj.id)}
+                      >
+                        <MoreHorizontal size={17} />
+                      </button>
+                      {menuFor === proj.id && (
+                        <div className="ws-hub-menu">
+                          <button type="button" onClick={() => { toggleFavorite(proj); setMenuFor(null); }}>
+                            <Star size={15} fill={proj.favorite ? 'currentColor' : 'none'} />
+                            {proj.favorite ? '取消收藏' : '收藏'}
+                          </button>
+                          <button type="button" onClick={() => { toggleArchive(proj); setMenuFor(null); }}>
+                            {proj.archived ? <ArchiveRestore size={15} /> : <Archive size={15} />}
+                            {proj.archived ? '恢复' : '归档'}
+                          </button>
+                        </div>
+                      )}
+                    </div>
                   </div>
-                  {proj.desc && <p className="ws-hub-desc">{proj.desc}</p>}
-                  <div className="ws-hub-meta">
-                    <span className="ws-hub-style">
-                      <i style={{ background: STYLES.find(s => s.key === proj.styleKey)?.tone }} />
-                      {styleName(proj.styleKey) || '未锁定'}
-                    </span>
-                    <span>{proj.sessionsCount} 个 Session</span>
-                    <span>算力 {proj.quotaUsed}/{proj.quotaLimit}</span>
-                  </div>
-                  <div className="ws-hub-steps">
-                    {STAGES.map((st, idx) => (
-                      <span key={st.key} className={idx < proj.stageIndex ? 'done' : idx === proj.stageIndex ? 'cur' : ''}>
-                        {st.label}
+                  <div className="ws-hub-body">
+                    <div className="ws-hub-title">
+                      <span className="ws-hub-name">
+                        {proj.favorite && <Star size={13} className="ws-hub-fav" fill="currentColor" />}
+                        <b>{proj.name}</b>
                       </span>
-                    ))}
+                      <small>{proj.updatedAt}</small>
+                    </div>
+                    {proj.desc && <p className="ws-hub-desc">{proj.desc}</p>}
                   </div>
-                  <div className="ws-hub-foot">
-                    <button type="button" className="ws-btn primary" onClick={e => { e.stopPropagation(); openProject(proj); }}>
-                      进入工作台 <ArrowRight size={13} />
-                    </button>
-                  </div>
-                </div>
-              </article>
-            ))}
-          </div>
+                </article>
+              ))}
+            </div>
+          )}
         </div>
 
         {newProjOpen && (
@@ -1653,11 +1735,16 @@ export default function WorkspacePage({ role } = {}) {
                 </>
               ) : (
                 <>
-                  <div className="ws-h-title">剧本资产</div>
-                  <button type="button" className="ws-h-item clickable" onClick={openScriptReader}>
+                  <div className="ws-h-title">剧本资产 & Project Metadata</div>
+                  <button type="button" className="ws-h-item clickable" onClick={() => openScriptReader('human')}>
                     <FileText size={13} />
                     <span>{scriptTitle}</span>
-                    <small className="ok">打开</small>
+                    <small className="ok">正文</small>
+                  </button>
+                  <button type="button" className="ws-h-item clickable" onClick={() => openScriptReader('yaml')}>
+                    <Wrench size={13} />
+                    <span>AI 结构化剧本 (YAML)</span>
+                    <small className="ok">Spec</small>
                   </button>
                   <div className="ws-h-title">风格锁定</div>
                   <div className="ws-h-item">
@@ -1899,10 +1986,8 @@ export default function WorkspacePage({ role } = {}) {
                   return (
                     <div key={shot.id} className={`ws-shot-card ${shot.mocap ? 'mocap' : ''} ${st === 'done' ? 'done' : ''}`}>
                       <div className="ws-shot-head">
-                        <span className="ws-shot-no">镜头 0{idx + 1}</span>
                         <b>{shot.scene} · {shot.title}</b>
                         <small>{shot.duration}</small>
-                        <span className="ws-shot-model" title="Agent 根据剧本自动路由的模型 API">{shot.modelApi}</span>
                         {canViewTrace && (
                           <button
                             type="button"
@@ -1913,10 +1998,6 @@ export default function WorkspacePage({ role } = {}) {
                             {shot.traceId} ↗
                           </button>
                         )}
-                        <span className={`ws-shot-channel ${shot.mocap ? 'mocap' : ''}`}>
-                          {shot.mocap ? <AlertTriangle size={11} /> : <Film size={11} />}
-                          {shot.channel}
-                        </span>
                       </div>
 
                       <div className="ws-shot-body">
@@ -2009,11 +2090,19 @@ export default function WorkspacePage({ role } = {}) {
               <div className="ws-video-list">
                 <div className="ws-shot-card done">
                   <div className="ws-shot-head">
-                    <span className="ws-shot-no">成片合集</span>
-                    <b>{scriptTitle} · 3 镜合成（19s）</b>
+                    <span className="ws-shot-no">成片预览</span>
+                    <b>超燃决战菜市场！（{scriptTitle} · 成片演示）</b>
                     <span className="ws-shot-channel">暗调电影感 · 已过审</span>
                   </div>
                   <div className="ws-publish-body">
+                    <div className="ws-publish-video-wrap">
+                      <video
+                        className="ws-publish-video"
+                        src="/api/files/demo-caishichang.mp4"
+                        controls
+                        preload="metadata"
+                      />
+                    </div>
                     <div className="ws-publish-copy">
                       <b>小红书 / 抖音宣发草稿（Agent 自动提炼）</b>
                       <p>🌧️ 民国雨夜，一封无名电报把女记者苏晚引向“济世堂”后门…</p>
@@ -2081,27 +2170,47 @@ export default function WorkspacePage({ role } = {}) {
                 <small>{scriptMeta} · Harness 剧本资产</small>
               </div>
               <div className="ws-script-modal-actions">
-                <button
-                  type="button"
-                  className={`ws-btn icon ${highlightOn ? 'on' : ''}`}
-                  onClick={() => setHighlightOn(v => !v)}
-                  title="高亮人物 / 道具 / 场景 / 动捕"
-                  aria-label="高亮"
-                >
-                  <Highlighter size={15} />
-                </button>
+                <div className="ws-script-mode-tabs">
+                  <button
+                    type="button"
+                    className={scriptViewMode === 'human' ? 'active' : ''}
+                    onClick={() => setScriptViewMode('human')}
+                  >
+                    剧本正文
+                  </button>
+                  <button
+                    type="button"
+                    className={scriptViewMode === 'yaml' ? 'active' : ''}
+                    onClick={() => setScriptViewMode('yaml')}
+                  >
+                    AI 结构化 YAML
+                  </button>
+                </div>
+                {scriptViewMode === 'human' && (
+                  <button
+                    type="button"
+                    className={`ws-btn icon ${highlightOn ? 'on' : ''}`}
+                    onClick={() => setHighlightOn(v => !v)}
+                    title="高亮人物 / 道具 / 场景 / 动捕"
+                    aria-label="高亮"
+                  >
+                    <Highlighter size={15} />
+                  </button>
+                )}
                 <button type="button" className="ws-btn" onClick={() => setScriptModalOpen(false)}>取消</button>
-                <button type="button" className={`ws-btn primary ${saved ? 'saved' : ''}`} onClick={saveScriptEdit} disabled={saving}>
-                  {saving ? <Loader2 size={13} className="spin" /> : saved ? <Check size={13} /> : <Check size={13} />}
-                  {saving ? '保存中…' : saved ? '已保存' : '保存并更新 Harness'}
-                </button>
+                {scriptViewMode === 'human' && (
+                  <button type="button" className={`ws-btn primary ${saved ? 'saved' : ''}`} onClick={saveScriptEdit} disabled={saving}>
+                    {saving ? <Loader2 size={13} className="spin" /> : saved ? <Check size={13} /> : <Check size={13} />}
+                    {saving ? '保存中…' : saved ? '已保存' : '保存并更新 Harness'}
+                  </button>
+                )}
                 <button type="button" className="ws-btn icon" onClick={() => setScriptModalOpen(false)} aria-label="关闭">
                   <X size={15} />
                 </button>
               </div>
             </div>
 
-            {highlightOn && (
+            {scriptViewMode === 'human' && highlightOn && (
               <div className="ws-script-legend">
                 <span><i className="character" /> 人物</span>
                 <span><i className="prop" /> 道具</span>
@@ -2111,23 +2220,37 @@ export default function WorkspacePage({ role } = {}) {
             )}
 
             <div className="ws-script-modal-body">
-              <div className={`ws-script-editor-wrap ${highlightOn ? 'hl' : ''}`}>
-                {highlightOn && (
-                  <div ref={scriptBackdropRef} className="ws-script-editor-backdrop" aria-hidden="true">
-                    {renderHighlightedScript(scriptDraft)}
+              {scriptViewMode === 'yaml' ? (
+                <div className="ws-yaml-view">
+                  <div className="ws-meta-cards">
+                    <div><small>画幅</small><b>{PROJECT_METADATA.aspect_ratio}</b></div>
+                    <div><small>叙事风格</small><b>{PROJECT_METADATA.narrative_style}</b></div>
+                    <div><small>整体风格</small><b>{PROJECT_METADATA.visual_style}</b></div>
+                    <div><small>角色 / 场景 / 道具</small><b>{PROJECT_METADATA.characters.length} / {PROJECT_METADATA.locations.length} / {PROJECT_METADATA.props.length}</b></div>
+                    <div className="wide"><small>故事梗概</small><p>{PROJECT_METADATA.synopsis}</p></div>
+                    <div className="wide"><small>全局约束（Global Constraints）</small><p>{PROJECT_METADATA.global_constraints.join(' · ')}</p></div>
                   </div>
-                )}
-                <textarea
-                  ref={scriptEditorRef}
-                  className="ws-script-editor ws-script-editor--full"
-                  value={scriptDraft}
-                  onChange={e => setScriptDraft(e.target.value)}
-                  onScroll={e => {
-                    if (scriptBackdropRef.current) scriptBackdropRef.current.scrollTop = e.currentTarget.scrollTop;
-                  }}
-                  spellCheck={false}
-                />
-              </div>
+                  <pre className="ws-yaml-code">{AI_SCRIPT_YAML}</pre>
+                </div>
+              ) : (
+                <div className={`ws-script-editor-wrap ${highlightOn ? 'hl' : ''}`}>
+                  {highlightOn && (
+                    <div ref={scriptBackdropRef} className="ws-script-editor-backdrop" aria-hidden="true">
+                      {renderHighlightedScript(scriptDraft)}
+                    </div>
+                  )}
+                  <textarea
+                    ref={scriptEditorRef}
+                    className="ws-script-editor ws-script-editor--full"
+                    value={scriptDraft}
+                    onChange={e => setScriptDraft(e.target.value)}
+                    onScroll={e => {
+                      if (scriptBackdropRef.current) scriptBackdropRef.current.scrollTop = e.currentTarget.scrollTop;
+                    }}
+                    spellCheck={false}
+                  />
+                </div>
+              )}
             </div>
           </div>
         </div>

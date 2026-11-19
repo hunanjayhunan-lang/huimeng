@@ -71,6 +71,137 @@ export const PRESET_SCRIPT = {
 
 export const IDEA_EXAMPLE = '民国雨夜，女记者追查一桩失踪案，线索指向一只停走的怀表。';
 
+// 一、项目级属性（Project Metadata · Agent Harness 全局上下文）
+export const PROJECT_METADATA = {
+  title: '《雨巷迷踪》EP01 · 停走的怀表',
+  synopsis: '民国雨夜，女记者苏晚追查一桩失踪案，尾随神秘人至济世堂药铺，从账房沈砚手中拿到停在 3:15 的怀表与 07 号黄铜钥匙，次日黄昏追至钟楼天台揭开“明晚三点十五，天台见”的新悬念。',
+  aspect_ratio: '16:9',
+  narrative_style: '民国悬疑 · 强钩子快节奏',
+  visual_style: '暗调电影感 · 低照度冷暖对比 · 35mm 胶片颗粒',
+  characters: [
+    { id: 'C01', name: '苏晚', desc: '25岁女记者，短发、米色风衣、手持油纸伞' },
+    { id: 'C02', name: '沈砚', desc: '32岁药铺账房，深色长衫、圆框眼镜、神情冷峻' },
+    { id: 'C03', name: '神秘人', desc: '反派黑衣人，黑色礼帽、立领长风衣、帽檐压低遮脸' },
+  ],
+  locations: [
+    { id: 'L01', name: '雨夜老街', desc: '民国窄巷青石板、湿滑反光、济世堂后门红灯笼' },
+    { id: 'L02', name: '药铺内景', desc: '幽暗中药铺、满墙木质药柜、柜台上方暖黄摇晃吊灯' },
+    { id: 'L03', name: '黄昏天台', desc: '老城钟楼旁天台、低矮女儿墙、黄昏晚霞逆光剪影' },
+  ],
+  props: [
+    { id: 'P01', name: '停走的怀表', owner: 'C02 → C01', initial_state: '表盖闭合，指针停在 3:15' },
+    { id: 'P02', name: '黄铜钥匙', owner: 'C02 → C01', initial_state: '氧化黄铜质地，刻有“07 · 钟楼天台”' },
+    { id: 'P03', name: '泛黄旧照片', owner: 'C01 / C03', initial_state: '撕成两半的民国合影，背面有褪色墨字' },
+  ],
+  global_constraints: [
+    '全片锁定「暗调电影感」，中途不可切换风格',
+    '人物外貌与服饰跨镜头严格一致（绑定 C01/C02/C03 过审资产）',
+    '民国时代背景：严禁出现现代建筑、霓虹灯牌、现代手机或服饰',
+  ],
+};
+
+// 二、最终给 AI 的结构化剧本（YAML）
+export const AI_SCRIPT_YAML = `project:
+  title: ${PROJECT_METADATA.title}
+  aspect_ratio: "${PROJECT_METADATA.aspect_ratio}"
+  visual_style: ${PROJECT_METADATA.visual_style}
+  narrative_style: ${PROJECT_METADATA.narrative_style}
+  global_constraints:
+    - 严禁出现现代建筑、现代服饰
+    - 人物与道具必须引用过审资产 ID（C01/C02/C03, P01/P02/P03, L01/L02/L03）
+
+scenes:
+  - id: E01-S01
+    title: 雨夜尾随
+    function: 建立悬疑氛围，引入女主角与济世堂线索
+    location: L01
+    time: night
+    environment: exterior
+    characters: [C01, C03]
+    props:
+      - id: P03
+        initial_state: C01 左手紧攥半张边角卷曲的泛黄旧照片
+        final_state: C01 低头查看照片背面“济世堂”墨字
+    shots:
+      - id: c01
+        duration: 5
+        shot_type: wide_shot
+        camera_movement: push_in
+        subject: C01
+        action: 苏晚撑着油纸伞快步穿行窄巷，尾随拐进济世堂后门落锁的神秘人
+        spatial_relationship:
+          position: 画面中央偏左（前景苏晚，十步外远景 C03）
+          background: L01 民国雨夜老街
+        lighting:
+          description: 暖黄色药铺灯笼与冷灰色暴雨夜形成强烈对比
+        dialogue: "苏晚（压低声音，自语）：照片背面画的就是济世堂……三点十五分，人怎么一转眼就不见了？"
+        constraints:
+          - 不出现现代建筑
+          - 不出现其他无关行人
+
+  - id: E01-S02
+    title: 药铺对峙
+    function: 抛出死亡反转与 07 号黄铜钥匙新线索
+    location: L02
+    time: night
+    environment: interior
+    characters: [C01, C02]
+    props:
+      - id: P01
+        initial_state: 置于柜台抽屉内，表盖闭合
+        final_state: 推至灯光下弹开表盖，指针停在 3:15
+      - id: P02
+        initial_state: 刻有“07 · 钟楼天台”的氧化黄铜钥匙
+        final_state: 被 C01 攥紧带离药铺
+    shots:
+      - id: c02
+        duration: 8
+        shot_type: medium_shot
+        camera_movement: pan
+        subject: C02
+        action: 苏晚拍下旧照片质问，沈砚停下算盘推出停走的怀表与 07 号黄铜钥匙
+        spatial_relationship:
+          position: 柜台两侧双人对峙构图
+          background: L02 满墙木质药柜与摇晃吊灯
+        lighting:
+          description: 柜台上方单盏暖黄吊灯照亮桌面道具，四周暗部压低
+        dialogue:
+          - "苏晚（急切）：别装了！刚刚那个穿黑衣戴礼帽的人进了你们后门，我要见他。"
+          - "沈砚（低沉，冷静）：后院只有死胡同。苏记者，别查了——照片上你要找的人，三天前就已经死了。这只停走的怀表和 07 号黄铜钥匙，是他临死前托我转交的最后一次警告。"
+        constraints:
+          - 怀表指针必须清晰停在 3:15
+          - 禁止现代照明灯具
+
+  - id: E01-S03
+    title: 天台追逐
+    function: 高潮动作戏，拼齐照片留下集尾悬念
+    location: L03
+    time: dusk
+    environment: exterior
+    mocap_required: true
+    characters: [C03, C01]
+    props:
+      - id: P03
+        initial_state: C03 手持另半张泛黄旧照片
+        final_state: C01 接住飘落照片并与前半张拼齐
+    shots:
+      - id: c03
+        duration: 6
+        shot_type: extreme_long_shot
+        camera_movement: tracking
+        routing_channel: Mocap-Engine-V2
+        subject: C03
+        action: 神秘人扬手甩出照片，纵身翻越屋顶、凌空翻滚落地逃脱
+        spatial_relationship:
+          position: 女儿墙边缘高处剪影与门口追赶的 C01 形成纵深
+          background: L03 黄昏天台逆光晚霞
+        lighting:
+          description: 黄昏低角度逆光剪影，冷暖霞光交界
+        dialogue: "苏晚（喘息，大喊）：站住！停走的怀表和这半张照片，到底是谁让你放在济世堂的？！"
+        constraints:
+          - 高难度翻越动作强制走深度动捕通道
+          - 严禁文生视频直出`;
+
 // 剧本拆解结果
 export const BREAKDOWN = {
   scenes: [
@@ -141,6 +272,7 @@ export const DEMO_PROJECTS = [
     stageIndex: 1,
     status: 'active',
     statusText: '进行中 · 资产图',
+    favorite: false,
     quotaUsed: 160,
     quotaLimit: 1000,
     updatedAt: '刚刚',
@@ -156,6 +288,7 @@ export const DEMO_PROJECTS = [
     stageIndex: 4,
     status: 'active',
     statusText: '已完成 · 待发布',
+    favorite: false,
     quotaUsed: 90,
     quotaLimit: 600,
     updatedAt: '2 小时前',
@@ -171,6 +304,7 @@ export const DEMO_PROJECTS = [
     stageIndex: 2,
     status: 'review',
     statusText: '待审核',
+    favorite: false,
     quotaUsed: 310,
     quotaLimit: 1000,
     updatedAt: '昨天',

@@ -222,6 +222,34 @@
 .admin-workspace-badge { margin-left: auto; display: grid; place-items: center; min-width: 20px; height: 18px; padding: 0 5px; border-radius: 9px; color: #5c6572; background: #eceef1; font-size: 10px; font-style: normal; }
 .admin-workspace-nav button.selected .admin-workspace-badge { color: #2f6fb0; background: #e8f1fa; }
 
+/* 侧栏 Projects 树形展开（Plane / Linear 风格） */
+.ws-nav-projects { margin-top: 10px; padding-top: 10px; border-top: 1px solid #eceef1; }
+.ws-nav-projects-head {
+  display: flex; align-items: center; justify-content: space-between;
+  padding: 4px 10px 6px; color: #8c93a0; font-size: 11px; font-weight: 600; letter-spacing: .03em;
+}
+.ws-nav-proj-group { margin-bottom: 2px; }
+.ws-nav-proj-btn {
+  display: flex; align-items: center; gap: 8px; width: 100%; height: 32px; padding: 0 8px;
+  border: 0; border-radius: 7px; background: transparent; color: #363e4a;
+  font: 500 12.5px var(--font-sans); text-align: left; cursor: pointer;
+}
+.ws-nav-proj-btn:hover { background: #f0f2f5; }
+.ws-nav-proj-btn span { flex: 1; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.ws-nav-proj-btn svg { flex: 0 0 auto; color: #8a919c; }
+.ws-nav-proj-children {
+  display: flex; flex-direction: column; gap: 1px;
+  margin: 2px 0 6px 14px; padding-left: 10px; border-left: 1px solid #e6e8ec;
+}
+.ws-nav-sub {
+  display: flex; align-items: center; gap: 8px; width: 100%; height: 30px; padding: 0 8px;
+  border: 0; border-radius: 6px; background: transparent; color: #5c6572;
+  font: 500 12px var(--font-sans); text-align: left; cursor: pointer;
+}
+.ws-nav-sub:hover { background: #f0f2f5; color: #1f2630; }
+.ws-nav-sub.selected { background: #eef1f5; color: #1b2230; font-weight: 600; }
+.ws-nav-sub.selected svg { color: #2f6fb0; }
+
 .admin-workspace-foot { display: flex; align-items: center; gap: 8px; margin-top: auto; padding: 12px 10px 4px; border-top: 1px solid #eceef1; color: #737b87; font-size: 11px; white-space: nowrap; }
 .admin-workspace.collapsed .admin-workspace-brand { justify-content: center; padding-inline: 0; }
 .admin-workspace.collapsed .admin-workspace-nav { margin-top: 10px; }

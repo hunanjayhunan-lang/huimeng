@@ -4,7 +4,7 @@
 }
 
 .video-results.grid {
-  grid-template-columns: repeat(auto-fill, minmax(240px, 1fr));
+  grid-template-columns: repeat(auto-fill, minmax(300px, 1fr));
 }
 
 .video-results .video-card {
@@ -139,11 +139,20 @@
   flex-direction: column;
   gap: 8px;
   min-width: 0;
-  padding: 13px 15px 12px;
+  padding: 13px 15px 14px;
+}
+
+.video-card-title {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  min-width: 0;
 }
 
 .video-card h3 {
   margin: 0;
+  flex: 1;
+  min-width: 0;
   font-size: 15px;
   font-weight: 600;
   color: #25374a;
@@ -235,7 +244,7 @@
 }
 
 .video-card-time {
-  margin-left: auto;
+  flex: none;
   display: flex;
   align-items: center;
   gap: 4px;
@@ -247,14 +256,14 @@
 /* 列表视图 */
 .video-results.list .video-card {
   display: grid;
-  grid-template-columns: 210px minmax(0, 1fr);
+  grid-template-columns: 240px minmax(0, 1fr);
   align-items: stretch;
 }
 
 .video-results.list .video-thumb {
   aspect-ratio: auto;
   height: 100%;
-  min-height: 118px;
+  min-height: 140px;
 }
 
 .video-results.list .video-card-body {
@@ -714,7 +723,7 @@
 
 @media (max-width: 900px) {
   .video-results.list .video-card {
-    grid-template-columns: 170px minmax(0, 1fr);
+    grid-template-columns: 200px minmax(0, 1fr);
   }
   .detail-heading h1 {
     font-size: 22px;
