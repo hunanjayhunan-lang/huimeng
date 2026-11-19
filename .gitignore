@@ -8,3 +8,5 @@ preview/
 server/data/
 server/uploads/
 server/.env
+server/.out.log
+server/.err.log

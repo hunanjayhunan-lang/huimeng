@@ -44,8 +44,25 @@ export const api = {
   grantOrgQuota: (id, amount) => request(`/platform/orgs/${encodeURIComponent(id)}/quota`, { method: 'POST', body: JSON.stringify({ amount }) }),
   logout: () => request('/auth/session', { method: 'DELETE' }),
   platformOrganizations: () => request('/platform/orgs'),
+  // 平台用户目录（superadmin）
+  platformUsers: ({ role, status, orgId, q } = {}) => {
+    const query = new URLSearchParams();
+    if (role) query.set('role', role);
+    if (status) query.set('status', status);
+    if (orgId) query.set('orgId', orgId);
+    if (q) query.set('q', q);
+    return request(`/platform/users${query.size ? `?${query}` : ''}`);
+  },
+  setPlatformUserStatus: (id, status) => request(`/platform/users/${encodeURIComponent(id)}/status`, { method: 'PATCH', body: JSON.stringify({ status }) }),
+  revokePlatformUserSessions: id => request(`/platform/users/${encodeURIComponent(id)}/revoke-sessions`, { method: 'POST' }),
+  // 组织设置（org.admin）
+  orgProfile: () => request('/org/profile'),
+  renameOrg: name => request('/org/profile', { method: 'PATCH', body: JSON.stringify({ name }) }),
+  orgOptions: () => request('/org/options'),
+  orgUsage: (days = 30) => request(`/org/usage?days=${days}`),
   createPlatformOrg: (name, adminEmail) => request('/platform/orgs', { method: 'POST', body: JSON.stringify({ name, adminEmail }) }),
   setPlatformOrgStatus: (id, status) => request(`/platform/orgs/${encodeURIComponent(id)}/status`, { method: 'PATCH', body: JSON.stringify({ status }) }),
+  setPlatformOrgPlan: (id, plan) => request(`/platform/orgs/${encodeURIComponent(id)}/plan`, { method: 'PATCH', body: JSON.stringify({ plan }) }),
   setPlatformOrgAdmin: (id, email) => request(`/platform/orgs/${encodeURIComponent(id)}/admin`, { method: 'PATCH', body: JSON.stringify({ email }) }),
   acceptInvite: (token, email, password) => request('/auth/accept-invite', { method: 'POST', body: JSON.stringify({ token, email, password }) }),
   orgMembers: () => request('/org/members'),

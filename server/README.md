@@ -59,10 +59,17 @@ server/
 | POST | `/org/invites/:id/resend` | 重新生成邀请链接（管理员） |
 | DELETE | `/org/invites/:id` | 撤回邀请（管理员） |
 | GET | `/org/audit` | 查看 Org 管理操作记录（管理员） |
-| GET | `/org/quota` | 管理员查看 Org 与成员额度；普通成员查看本人额度 |
-| PUT | `/org/members/:id/quota` | 设置成员本月额度上限（管理员） |
+| GET | `/org/quota` | 管理员查看 Org 与成员积分；普通成员查看本人积分（含 `costCny` 实际花费） |
+| PUT | `/org/members/:id/quota` | 设置成员本月积分上限（管理员） |
+| GET | `/org/profile` | 组织基本信息（管理员） |
+| PATCH | `/org/profile` | 修改组织名称，写审计（管理员） |
+| GET | `/org/options` | 组织下拉选项；superadmin 看全部，org.admin 只看自己 |
+| GET | `/org/usage` | 组织用量与任务汇总，`?days=30`（管理员看全组织、成员只看本人） |
 | GET | `/platform/overview` | 平台统计与组织管理审计（superadmin） |
 | GET | `/platform/orgs` | 列出组织、成员数和管理员（superadmin） |
+| GET | `/platform/users` | 跨组织用户目录，`?role=&status=&orgId=&q=`（superadmin） |
+| PATCH | `/platform/users/:id/status` | 启用 / 停用账号，停用会立即撤销全部会话（superadmin） |
+| POST | `/platform/users/:id/revoke-sessions` | 强制指定账号下线（superadmin） |
 | POST | `/platform/orgs/:id/quota` | 按自然月给 Org 划拨额度点（superadmin） |
 | POST | `/platform/orgs` | 创建 Org 并为管理员邮箱生成邀请（superadmin） |
 | PATCH | `/platform/orgs/:id/status` | 启用或暂停 Org（superadmin） |
@@ -78,7 +85,9 @@ server/
 
 首次创建账号会接管已有的 bootstrap 数据；后续新 Org 不会继承其他 Org 的任务、文档、用量或文件。Org 内普通成员只能读取和操作自己创建的项目、剧本、画布、资产、拆解、对话、分发草稿、任务及文件；`org.admin` 可查看本 Org 全部记录。历史上没有创建者信息的记录仅对 Org 管理员可见。
 
-额度使用内部点数：图片任务 1 点、视频任务 8 点。任务创建时分别检查 Org 和成员余额并预占；成功后结算，失败或删除时释放。额度按 UTC 自然月重置，不结转。
+额度使用内部积分：图片任务预占 1 积分、视频任务预占 8 积分；任务完成后按真实成本重新结算（`CREDIT_CNY` 默认 ¥0.12/积分，即一张 Seedream 图），失败或取消时退还预占。额度按 UTC 自然月重置，不结转。
+
+LLM 调用（拆分镜 / 拆解 / 智能体对话）同样消耗积分：每 1000 tokens 计 1 积分，记在同一个 `quota_task_usage` 表里（`task_id` 存 `ai_calls.id`），因此额度面板的“已用积分”和调用追踪的“花费”能对上。
 
 业务数据（剧本 / 项目 / 画布 / 拆解 / 智能体消息）统一存在 `documents` 表，按 `kind` 区分：
 
@@ -255,8 +264,10 @@ ARK_PRICE_VIDEO=46          # 元/百万 tokens（Seedance-2.5-flash，不含视
 - 参考图 → 分镜关键帧 → Seedance 首帧，角色形象在整条链路上保持一致
 ## 已知限制 / 下一步
 
-- 没有用户体系，任务不隔离（试岗范围）。
+- ~~没有用户体系，任务不隔离~~ — 已实现：Org 多租户 + `org.admin` / `org.user` 角色 + superadmin，`tasks` / `documents` / `ai_calls` / `file_owners` 全部按 `org_id` 隔离，普通成员额外按 `created_by` 隔离。
 - 单进程内存轮询，重启后 `queued/running` 会继续被轮询，但并发没有上限；要用在生产得换 BullMQ / 定时任务 + 并发闸门。
 - 产物存本地磁盘，没接 OSS；没有清理策略（可以按 `created_at` 定期删）。
 - 还没有回调（`callback_url`）模式，只有轮询；公网可访问时可以二选一。
-- 前端已接：「成片」页是真实数据（列表轮询 / 新建生成任务 / 详情 / 重试 / 删除）。「画布」「智能体」等页面仍是前端演示数据，可以复用同一套 `src/api.js` 接进来。
+- 前端已接：「成片」真实任务、「剧本」「画布」「项目」「拆解」「智能体」「数据」「分发」「调用追踪」以及**两个管理面板全部 tab**。「资产」页仍是前端演示数据。
+- 平台管理员名单由 `SUPERADMIN_EMAILS` 环境变量控制，面板上不能授予/撤销（避免自我提权）；面板里也不能停用 superadmin 账号。
+- 账号停用会立即删除该用户全部会话，但“重置密码”尚未实现（需要发信渠道）。

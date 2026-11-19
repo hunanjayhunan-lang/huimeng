@@ -1,4 +1,4 @@
-import { activeTasks, hasMediaCall, recordAiCall, recordTaskEvent, registerTaskFile, updateTask } from './db.js';
+import { activeTasks, hasMediaCall, recordAiCall, recordTaskEvent, registerTaskFile, settleTaskQuota, updateTask } from './db.js';
 import { provider } from './providers/index.js';
 import { config } from './config.js';
 
@@ -51,6 +51,8 @@ async function tick() {
           costCny: Number(mediaCost.toFixed(4)),
           meta: { resultUrl: result.resultUrl },
         });
+        // 积分结算：按真实成本换算（mock provider 成本为 0 时回落到预占值）
+        settleTaskQuota(task.id, mediaCost);
       }
       if (result.status === 'failed') {
         patch.error = result.error || '生成失败';

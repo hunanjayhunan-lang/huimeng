@@ -20,6 +20,9 @@ export const config = {
   pollIntervalMs: Number(process.env.POLL_INTERVAL_MS || 1200),
   taskTimeoutMs: Number(process.env.TASK_TIMEOUT_MS || 15 * 60 * 1000),
   maxAttempts: Number(process.env.MAX_ATTEMPTS || 3),
+  // 积分定价：1 积分折合多少人民币。用于把真实成本换算成消耗积分。
+  // 默认对齐一张 Seedream 图（¥0.12），所以图片任务正好 1 分。
+  creditCny: Number(process.env.CREDIT_CNY || 0.12),
   jimeng: {
     ak: process.env.VOLC_ACCESS_KEY || '',
     sk: process.env.VOLC_SECRET_KEY || '',

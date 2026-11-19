@@ -14,6 +14,8 @@ import distributeRouter from './routes/distribute.js';
 import pipelineRouter, { ffmpegAvailable } from './routes/pipeline.js';
 import authRouter from './routes/auth.js';
 import platformRouter from './routes/platform.js';
+import platformUsersRouter from './routes/platform-users.js';
+import orgUsageRouter from './routes/org-usage.js';
 import quotaRouter from './routes/quota.js';
 
 const app = express();
@@ -30,22 +32,6 @@ app.use((req, res, next) => {
     console.log(`${new Date().toISOString()} ${req.method} ${req.originalUrl} ${res.statusCode} ${Date.now() - startedAt}ms #${req.requestId}`);
   });
   next();
-});
-
-// 极简内存限流，单机试岗足够
-const hits = new Map();
-app.use('/api', (req, res, next) => {
-  if (req.path === '/health') return next();
-  const now = Date.now();
-  const entry = hits.get(req.ip) || { count: 0, resetAt: now + 60_000 };
-  if (now > entry.resetAt) {
-    entry.count = 0;
-    entry.resetAt = now + 60_000;
-  }
-  entry.count += 1;
-  hits.set(req.ip, entry);
-  if (entry.count > 120) return res.status(429).json({ error: '请求太频繁，稍后再试' });
-  return next();
 });
 
 // 用户和 Org 由服务端会话确定，客户端不能提交 org_id。
@@ -75,6 +61,8 @@ app.get('/api/health', (req, res) => res.json({
 
 app.use('/api', authRouter);
 app.use('/api', platformRouter);
+app.use('/api', platformUsersRouter);
+app.use('/api', orgUsageRouter);
 app.use('/api', quotaRouter);
 
 app.get('/api/config', (req, res) => res.json({

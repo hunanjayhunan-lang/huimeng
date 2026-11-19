@@ -1,6 +1,6 @@
 import { config } from './config.js';
 import { arkFetch } from './ark-client.js';
-import { recordAiCall } from './db.js';
+import { chargeLlmQuota, recordAiCall } from './db.js';
 
 /** 从「可能带 ```json 包裹」的回复里抠出 JSON */
 export function parseJson(text) {
@@ -44,7 +44,7 @@ export const llm = {
       const usage = data?.usage || {};
       const costCny = (usage.prompt_tokens || 0) / 1e6 * config.ark.price.llmInput
         + (usage.completion_tokens || 0) / 1e6 * config.ark.price.llmOutput;
-      recordAiCall({
+      const callId = recordAiCall({
         kind,
         model: data?.model || model,
         promptTokens: usage.prompt_tokens,
@@ -54,8 +54,21 @@ export const llm = {
         latencyMs: Date.now() - startedAt,
         status: 'ok',
         costCny: Number(costCny.toFixed(6)),
-        meta: { json, maxTokens },
+        meta: { json, maxTokens, temperature },
+        requestId: data?.id || null,
+        // tracing：完整请求体与响应体
+        input: { model, messages, temperature, max_tokens: maxTokens, response_format: body.response_format, thinking: body.thinking },
+        output: data?.choices?.map(choice => ({
+          index: choice.index,
+          finish_reason: choice.finish_reason,
+          role: choice.message?.role,
+          content: choice.message?.content,
+          reasoning_content: choice.message?.reasoning_content,
+        })) || null,
+        toolCalls: data?.choices?.flatMap(choice => choice.message?.tool_calls || []) || null,
       });
+      // LLM 调用也消耗积分：按 token 数折算，记在 quota_task_usage 里供额度面板汇总
+      chargeLlmQuota({ callId, totalTokens: usage.total_tokens, costCny });
       return {
         text: data?.choices?.[0]?.message?.content?.trim() || '',
         usage,
@@ -69,6 +82,7 @@ export const llm = {
         status: 'error',
         error: error.message,
         meta: { json, maxTokens },
+        input: { model, messages, temperature, max_tokens: maxTokens },
       });
       throw error;
     }

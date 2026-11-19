@@ -43,6 +43,29 @@ pnpm dev      # 终端 2：前端 http://127.0.0.1:5173
 | `/app/distribute` | 分发 |
 | `/admin` | 平台 / 组织管理 |
 
+### 管理面板
+
+平台管理员与组织管理员共用同一套工作区骨架（`src/components/AdminWorkspace.jsx`）：左侧可折叠侧栏 + 顶栏工具条 + 内容区，靠 `session.role` 决定渲染哪个面板和哪些 tab。每个 tab 都有独立 URL，刷新与前进后退均可用。
+
+| URL | 面板 | Tab |
+| --- | --- | --- |
+| `/admin/overview` | 平台管理员 | 平台概览 |
+| `/admin/organizations` | 平台管理员 | 组织管理（详情页 `/platform/organizations/:id`） |
+| `/admin/users` | 平台管理员 | 用户与权限 |
+| `/admin/usage` | 平台管理员 | 平台用量 |
+| `/admin/tracing` | 平台管理员 | 调用追踪 |
+| `/admin/audit` | 平台管理员 | 操作审计 |
+| `/admin/org/overview` | 组织管理员 | 概览 |
+| `/admin/org/members` | 组织管理员 | 成员管理 |
+| `/admin/org/quota` | 组织管理员 | 额度分配 |
+| `/admin/org/projects` | 组织管理员 | 项目管理 |
+| `/admin/org/usage` | 组织管理员 | 用量与任务 |
+| `/admin/org/tracing` | 组织管理员 | 调用追踪 |
+| `/admin/org/audit` | 组织管理员 | 审计记录 |
+| `/admin/org/settings` | 组织管理员 | 组织设置 |
+
+两个面板的 tab 全部接真实接口，没有前端演示数据。
+
 标题会同步成「页面名 · AI绘梦」。部署到静态服务器时记得配置 SPA fallback（`try_files $uri /index.html`），否则直接访问 `/app/data` 会 404。
 
 ## 页面与后端

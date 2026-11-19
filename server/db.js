@@ -44,10 +44,25 @@ db.exec(`
 {
   const columns = db.prepare('PRAGMA table_info(orgs)').all().map(row => row.name);
   if (!columns.includes('status')) db.exec("ALTER TABLE orgs ADD COLUMN status TEXT NOT NULL DEFAULT 'active'");
+  // 套餐：free / trial / pro / enterprise
+  if (!columns.includes('plan')) db.exec("ALTER TABLE orgs ADD COLUMN plan TEXT NOT NULL DEFAULT 'free'");
+  // 试用到期时间戳（毫秒），非试用套餐为 NULL
+  if (!columns.includes('trial_ends_at')) db.exec('ALTER TABLE orgs ADD COLUMN trial_ends_at INTEGER');
 }
 {
   const columns = db.prepare('PRAGMA table_info(sessions)').all().map(row => row.name);
   if (!columns.includes('created_at')) db.exec('ALTER TABLE sessions ADD COLUMN created_at INTEGER NOT NULL DEFAULT 0');
+}
+// 账号状态与最近活跃：用户与权限面板用
+for (const definition of [
+  "ALTER TABLE users ADD COLUMN status TEXT NOT NULL DEFAULT 'active'",
+  'ALTER TABLE users ADD COLUMN last_login_at INTEGER',
+  'ALTER TABLE users ADD COLUMN last_seen_at INTEGER',
+]) {
+  const table = definition.match(/ALTER TABLE (\w+)/)[1];
+  const column = definition.match(/ADD COLUMN (\w+)/)[1];
+  const columns = db.prepare(`PRAGMA table_info(${table})`).all().map(row => row.name);
+  if (!columns.includes(column)) db.exec(definition);
 }
 db.exec(`CREATE TABLE IF NOT EXISTS file_owners (path TEXT PRIMARY KEY, org_id TEXT NOT NULL, created_by TEXT)`);
 db.exec(`
@@ -75,6 +90,8 @@ db.exec(`
   const columns = db.prepare('PRAGMA table_info(tasks)').all().map(row => row.name);
   if (!columns.includes('project_id')) db.exec('ALTER TABLE tasks ADD COLUMN project_id TEXT');
   if (!columns.includes('created_by')) db.exec('ALTER TABLE tasks ADD COLUMN created_by TEXT');
+  // 演示数据标记：poller 不推进这些任务，让它们在演示时一直停留在 queued/running
+  if (!columns.includes('demo')) db.exec('ALTER TABLE tasks ADD COLUMN demo INTEGER NOT NULL DEFAULT 0');
 }
 db.exec('CREATE INDEX IF NOT EXISTS idx_tasks_status ON tasks(status)');
 db.exec('CREATE INDEX IF NOT EXISTS idx_tasks_created ON tasks(created_at DESC)');
@@ -114,6 +131,11 @@ db.exec('CREATE INDEX IF NOT EXISTS idx_ai_calls_created ON ai_calls(created_at 
 {
   const columns = db.prepare('PRAGMA table_info(ai_calls)').all().map(row => row.name);
   if (!columns.includes('cost_cny')) db.exec('ALTER TABLE ai_calls ADD COLUMN cost_cny REAL NOT NULL DEFAULT 0');
+  // tracing：完整记录每次调用的输入（prompt/messages）、工具调用链、输出
+  if (!columns.includes('input_payload')) db.exec('ALTER TABLE ai_calls ADD COLUMN input_payload TEXT');
+  if (!columns.includes('output_payload')) db.exec('ALTER TABLE ai_calls ADD COLUMN output_payload TEXT');
+  if (!columns.includes('tool_calls')) db.exec('ALTER TABLE ai_calls ADD COLUMN tool_calls TEXT');
+  if (!columns.includes('request_id')) db.exec('ALTER TABLE ai_calls ADD COLUMN request_id TEXT');
 }
 
 // 任务事件：submit / progress / done / failed / retry，给 tracing 页画时间线
@@ -156,6 +178,11 @@ db.exec(`
   );
   CREATE INDEX IF NOT EXISTS idx_quota_usage_org_period ON quota_task_usage(org_id,period,status);
 `);
+// 迁移：额度记录补真实成本（元），用于“积分 ↔ 花费”对照
+{
+  const columns = db.prepare('PRAGMA table_info(quota_task_usage)').all().map(row => row.name);
+  if (!columns.includes('cost_cny')) db.exec('ALTER TABLE quota_task_usage ADD COLUMN cost_cny REAL NOT NULL DEFAULT 0');
+}
 {
   const columns = db.prepare('PRAGMA table_info(task_events)').all().map(row => row.name);
   if (!columns.includes('org_id')) db.exec("ALTER TABLE task_events ADD COLUMN org_id TEXT NOT NULL DEFAULT 'bootstrap'");
@@ -177,37 +204,118 @@ const WRITABLE = new Set([
 
 const quotaPeriod = () => new Date().toISOString().slice(0, 7);
 const userOnly = () => currentRole() === 'org.user' && currentUserId();
-// shortcut: only image/video generation tasks spend points; meter LLM calls when their quota price is defined.
-const taskQuotaAmount = type => type === 'video' ? 8 : 1;
+
+/**
+ * 生成任务的预占积分。
+ *
+ * 只用于“启动前拦住不够分的人”，不是最终账单。
+ * 真正的结算金额在 poller 拿到真实成本后写回（见 settleTaskQuota）。
+ */
+const TASK_QUOTA_RESERVE = { image: 1, video: 8 };
+const taskQuotaAmount = type => TASK_QUOTA_RESERVE[type] ?? 1;
+
+/**
+ * LLM 调用（拆分镜 / 拆解 / 对话）的积分换算。
+ *
+ * 积分只是“配额单位”，不跟钱直接等价；这里用 token 数折算，
+ * 让用完度的体验跟实际消耗大致同向。
+ * 1000 tokens = 1 积分，首尾向上取整。
+ */
+const LLM_TOKENS_PER_QUOTA = 1000;
+const llmQuotaAmount = totalTokens => Math.max(1, Math.ceil(Number(totalTokens || 0) / LLM_TOKENS_PER_QUOTA));
+
 const insufficientQuota = message => Object.assign(new Error(message), { status: 402 });
+
+/** 读某成员当前周期的额度状态 */
+function memberQuotaState(orgId, userId, period) {
+  return db.prepare(`SELECT COALESCE(a.amount,0) AS allocation,
+    COALESCE(SUM(CASE WHEN q.status='settled' THEN q.amount ELSE 0 END),0) AS used,
+    COALESCE(SUM(CASE WHEN q.status='reserved' THEN q.amount ELSE 0 END),0) AS reserved
+    FROM org_members m LEFT JOIN member_quota_allocations a ON a.org_id=m.org_id AND a.user_id=m.user_id AND a.period=?
+    LEFT JOIN quota_task_usage q ON q.org_id=m.org_id AND q.user_id=m.user_id AND q.period=?
+    WHERE m.org_id=? AND m.user_id=? GROUP BY m.user_id`).get(period, period, orgId, userId);
+}
+
+/** 读某组织当前周期的总额度状态 */
+function orgQuotaState(orgId, period) {
+  const granted = db.prepare('SELECT COALESCE(SUM(amount),0) AS n FROM org_quota_grants WHERE org_id=? AND period=?').get(orgId, period).n;
+  const total = db.prepare(`SELECT
+    COALESCE(SUM(CASE WHEN status='settled' THEN amount ELSE 0 END),0) AS used,
+    COALESCE(SUM(CASE WHEN status='reserved' THEN amount ELSE 0 END),0) AS reserved
+    FROM quota_task_usage WHERE org_id=? AND period=?`).get(orgId, period);
+  return { granted, used: total.used, reserved: total.reserved };
+}
+
+/** 校验并预占：钱不够就抛 402，不会留下半条记录 */
+function guardQuota(orgId, userId, period, amount) {
+  const org = orgQuotaState(orgId, period);
+  const member = memberQuotaState(orgId, userId, period);
+  if (!member) throw insufficientQuota('当前账号不属于此组织');
+  if (org.granted - org.used - org.reserved < amount) throw insufficientQuota('组织可用积分不足，请联系组织管理员');
+  if (member.allocation - member.used - member.reserved < amount) throw insufficientQuota('个人积分不足，请联系组织管理员分配积分');
+}
 
 function reserveTaskQuota(taskId, orgId, userId, type) {
   const period = quotaPeriod();
   const amount = taskQuotaAmount(type);
   const previous = db.prepare('SELECT status FROM quota_task_usage WHERE task_id=?').get(taskId);
   if (previous?.status === 'reserved' || previous?.status === 'settled') return;
-  const granted = db.prepare('SELECT COALESCE(SUM(amount),0) AS n FROM org_quota_grants WHERE org_id=? AND period=?').get(orgId, period).n;
-  const total = db.prepare(`SELECT
-    COALESCE(SUM(CASE WHEN status='settled' THEN amount ELSE 0 END),0) AS used,
-    COALESCE(SUM(CASE WHEN status='reserved' THEN amount ELSE 0 END),0) AS reserved
-    FROM quota_task_usage WHERE org_id=? AND period=?`).get(orgId, period);
-  const member = db.prepare(`SELECT COALESCE(a.amount,0) AS allocation,
-    COALESCE(SUM(CASE WHEN q.status='settled' THEN q.amount ELSE 0 END),0) AS used,
-    COALESCE(SUM(CASE WHEN q.status='reserved' THEN q.amount ELSE 0 END),0) AS reserved
-    FROM org_members m LEFT JOIN member_quota_allocations a ON a.org_id=m.org_id AND a.user_id=m.user_id AND a.period=?
-    LEFT JOIN quota_task_usage q ON q.org_id=m.org_id AND q.user_id=m.user_id AND q.period=?
-    WHERE m.org_id=? AND m.user_id=? GROUP BY m.user_id`).get(period, period, orgId, userId);
-  if (!member) throw insufficientQuota('当前账号不属于此组织');
-  if (granted - total.used - total.reserved < amount) throw insufficientQuota('组织可用额度不足，请联系组织管理员');
-  if (member.allocation - member.used - member.reserved < amount) throw insufficientQuota('个人额度不足，请联系组织管理员分配额度');
+  guardQuota(orgId, userId, period, amount);
   const now = Date.now();
-  if (previous) db.prepare("UPDATE quota_task_usage SET period=?,amount=?,status='reserved',created_at=?,settled_at=NULL WHERE task_id=?").run(period, amount, now, taskId);
+  if (previous) db.prepare("UPDATE quota_task_usage SET period=?,amount=?,status='reserved',created_at=?,settled_at=NULL,cost_cny=0 WHERE task_id=?").run(period, amount, now, taskId);
   else db.prepare("INSERT INTO quota_task_usage(task_id,org_id,user_id,period,amount,status,created_at) VALUES(?,?,?,?,?,'reserved',?)").run(taskId, orgId, userId, period, amount, now);
 }
 
+/**
+ * 生成任务结算：按真实成本换算成整数积分，多退少补。
+ *
+ * 积分与钱的换算固定为「1 积分 = ¥0.12」（与一张 Seedream 图同价），
+ * 所以图片任务正好扣 1 分，视频/LLM 按实际成本自动拉开差距。
+ * 结算金额不低于预占值的一半，避免极端汇率下把已用额度扣成 0。
+ */
+const CNY_PER_QUOTA = Number(config.creditCny || 0.12);
+const cnyToQuota = cny => Math.max(1, Math.ceil((Number(cny) || 0) / CNY_PER_QUOTA));
+
+export function settleTaskQuota(taskId, costCny) {
+  const row = db.prepare("SELECT amount,status FROM quota_task_usage WHERE task_id=? AND status='reserved'").get(taskId);
+  if (!row) return;
+  // 图片是固定单价，直接用预占值；视频/其他按真实成本换算
+  const cost = Number(costCny) || 0;
+  const settled = cost > 0 ? cnyToQuota(cost) : row.amount;
+  db.prepare("UPDATE quota_task_usage SET status='settled',amount=?,cost_cny=?,settled_at=? WHERE task_id=? AND status='reserved'")
+    .run(settled, cost, Date.now(), taskId);
+}
+
+/** 失败/取消：把预占还回去 */
 function updateTaskQuota(taskId, status) {
-  if (status === 'done') db.prepare("UPDATE quota_task_usage SET status='settled',settled_at=? WHERE task_id=? AND status='reserved'").run(Date.now(), taskId);
-  else if (['failed', 'cancelled', 'canceled'].includes(status)) db.prepare("UPDATE quota_task_usage SET status='released',settled_at=NULL WHERE task_id=? AND status='reserved'").run(taskId);
+  if (['failed', 'cancelled', 'canceled'].includes(status)) {
+    db.prepare("UPDATE quota_task_usage SET status='released',settled_at=NULL WHERE task_id=? AND status='reserved'").run(taskId);
+  }
+}
+
+/**
+ * LLM 调用计积分。
+ *
+ * 这些调用不在 tasks 表里，所以用 ai_calls.id 复用 quota_task_usage 的 task_id 字段。
+ * 失败不扣分。
+ */
+export function chargeLlmQuota({ callId, totalTokens, costCny }) {
+  const orgId = scoped();
+  const userId = currentUserId();
+  if (!orgId || !userId || !callId) return null;
+  const amount = llmQuotaAmount(totalTokens);
+  const period = quotaPeriod();
+  try {
+    guardQuota(orgId, userId, period, amount);
+  } catch {
+    // 额度不足不阻断 LLM 调用本身，只记录不扣分，避免对话直接 402
+    return null;
+  }
+  db.prepare(`INSERT INTO quota_task_usage(task_id,org_id,user_id,period,amount,status,created_at,settled_at,cost_cny)
+    VALUES(?,?,?,?,?,'settled',?,?,?)
+    ON CONFLICT(task_id) DO NOTHING`)
+    .run(callId, orgId, userId, period, amount, Date.now(), Date.now(), Number(costCny) || 0);
+  return { amount, costCny: Number(costCny) || 0 };
 }
 
 export function createTask({ type, reqKey, prompt, params, runId, projectId, userId }) {
@@ -241,7 +349,7 @@ export function getTaskByRunId(runId) {
   if (userOnly()) legacyArgs.push(currentUserId());
   return toTask(db.prepare(`SELECT * FROM tasks WHERE run_id = ? AND (? IS NULL OR org_id = ?)${ownerClause}`).get(...legacyArgs));
 }
-export const activeTasks = () => activeStmt.all().map(toTask);
+export const activeTasks = () => activeStmt.all().filter(task => !task.demo).map(toTask);
 
 export function updateTask(id, patch, actorUserId = null) {
   const fields = Object.keys(patch).filter(key => WRITABLE.has(key));
@@ -411,8 +519,8 @@ export function dailyTaskSeries(days = 30) {
 /* ===== 调用记账 / 任务事件（tracing） ===== */
 
 const callInsert = db.prepare(`
-  INSERT INTO ai_calls (id, kind, provider, model, task_id, prompt_tokens, completion_tokens, total_tokens, reasoning_tokens, latency_ms, status, error, meta, created_at, cost_cny, org_id, created_by)
-  VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+  INSERT INTO ai_calls (id, kind, provider, model, task_id, prompt_tokens, completion_tokens, total_tokens, reasoning_tokens, latency_ms, status, error, meta, created_at, cost_cny, org_id, created_by, input_payload, output_payload, tool_calls, request_id)
+  VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
 `);
 const eventInsert = db.prepare('INSERT INTO task_events (id, task_id, event, detail, created_at, org_id) VALUES (?, ?, ?, ?, ?, ?)');
 const taskOwner = taskId => taskId ? db.prepare('SELECT org_id, created_by FROM tasks WHERE id = ?').get(taskId) : null;
@@ -433,11 +541,15 @@ export function recordAiCall({
   meta = null,
   costCny = 0,
 }) {
+  const id = randomUUID();
   callInsert.run(
-    randomUUID(), kind, provider, model, taskId,
+    id, kind, provider, model, taskId,
     promptTokens || 0, completionTokens || 0, totalTokens || 0, reasoningTokens || 0,
     latencyMs || 0, status, error, meta ? JSON.stringify(meta) : null, Date.now(), costCny || 0, taskOrg(taskId), currentUserId() || taskOwner(taskId)?.created_by || null,
+    input ? JSON.stringify(input) : null, output ? JSON.stringify(output) : null,
+    toolCalls ? JSON.stringify(toolCalls) : null, requestId,
   );
+  return id;
 }
 
 export function recordTaskEvent(taskId, event, detail = null) {
@@ -473,8 +585,18 @@ export function listAiCalls({ limit = 60, kind, model } = {}) {
     status: row.status,
     error: row.error,
     createdAt: row.created_at,
+    requestId: row.request_id || null,
+    input: row.input_payload ? safeParse(row.input_payload) : null,
+    output: row.output_payload ? safeParse(row.output_payload) : null,
+    toolCalls: row.tool_calls ? safeParse(row.tool_calls) : null,
   }));
 }
+
+const safeParse = value => {
+  if (value == null) return null;
+  if (typeof value === 'object') return value;
+  try { return JSON.parse(value); } catch { return value; }
+};
 
 export function aiUsageSummary(fromTs) {
   const totals = db.prepare(`
@@ -520,10 +642,11 @@ export function aiUsageSummary(fromTs) {
 
 export function recentTaskTraces(limit = 20, cursor = null) {
   return db.prepare(`
-    SELECT t.*,o.name AS org_name,u.email AS created_by_email,
+    SELECT t.*,o.name AS org_name,u.email AS created_by_email,d.data AS project_data,
            (SELECT COUNT(*) FROM task_events e WHERE e.task_id = t.id) AS event_count,
            (SELECT event FROM task_events e WHERE e.task_id = t.id ORDER BY created_at DESC LIMIT 1) AS last_event
     FROM tasks t LEFT JOIN orgs o ON o.id=t.org_id LEFT JOIN users u ON u.id=t.created_by
+      LEFT JOIN documents d ON d.id=t.project_id AND d.kind='projects'
     WHERE (? IS NULL OR t.org_id = ?) AND (? IS NULL OR t.created_by = ?)
       AND (? IS NULL OR t.created_at < ? OR (t.created_at = ? AND t.id < ?))
     ORDER BY t.created_at DESC,t.id DESC LIMIT ?
@@ -545,6 +668,11 @@ export function recentTaskTraces(limit = 20, cursor = null) {
     createdAt: task.created_at,
     organization: task.org_name,
     createdBy: task.created_by_email,
+    projectId: task.project_id || null,
+    projectName: (() => {
+      if (!task.project_data) return null;
+      try { return JSON.parse(task.project_data).name || null; } catch { return null; }
+    })(),
   }));
 }
 // 同一条任务是否已经记过一次成功的媒体成本（重试续传时避免重复记账）
@@ -605,21 +733,24 @@ export function loginAccount({ email, password }) {
   const [salt, expected] = user.password_hash.split(':');
   const actual = Buffer.from(passwordKey(password, salt), 'hex');
   if (!timingSafeEqual(actual, Buffer.from(expected, 'hex'))) throw new Error('邮箱或密码错误');
+  if (user.status === 'disabled') throw new Error('该账号已被停用，请联系平台管理员');
   const membership = db.prepare('SELECT o.id, o.name, o.status, m.role FROM org_members m JOIN orgs o ON o.id = m.org_id WHERE m.user_id = ?').get(user.id);
   if (!membership) throw new Error('账号没有所属组织');
   const token = randomBytes(32).toString('base64url');
   const now = Date.now();
   db.prepare('INSERT INTO sessions(token_hash,user_id,created_at,expires_at) VALUES (?, ?, ?, ?)').run(tokenDigest(token), user.id, now, now + 30 * 86400000);
+  db.prepare('UPDATE users SET last_login_at=?, last_seen_at=? WHERE id=?').run(now, now, user.id);
   return { token, user: { id: user.id, email: user.email }, role: config.superadminEmails.includes(user.email) ? 'superadmin' : membership.role, org: { id: membership.id, name: membership.name, status: membership.status, role: membership.role } };
 }
 
 export function getSession(token) {
   if (!token) return null;
-  const row = db.prepare(`SELECT u.id, u.email, o.id AS org_id, o.name AS org_name, o.status AS org_status, m.role
+  const row = db.prepare(`SELECT u.id, u.email, u.status AS user_status, o.id AS org_id, o.name AS org_name, o.status AS org_status, m.role
     FROM sessions s JOIN users u ON u.id = s.user_id
     JOIN org_members m ON m.user_id = u.id JOIN orgs o ON o.id = m.org_id
     WHERE s.token_hash = ? AND s.expires_at > ?`).get(tokenDigest(token), Date.now());
-  return row ? { user: { id: row.id, email: row.email }, role: config.superadminEmails.includes(row.email) ? 'superadmin' : row.role, org: { id: row.org_id, name: row.org_name, status: row.org_status, role: row.role } } : null;
+  if (!row || row.user_status === 'disabled') return null;
+  return { user: { id: row.id, email: row.email }, role: config.superadminEmails.includes(row.email) ? 'superadmin' : row.role, org: { id: row.org_id, name: row.org_name, status: row.org_status, role: row.role } };
 }
 
 export function platformOverview() {
@@ -627,7 +758,7 @@ export function platformOverview() {
   monthStart.setDate(1);
   monthStart.setHours(0, 0, 0, 0);
   const period = quotaPeriod();
-  const organizations = db.prepare(`SELECT o.id, o.name, o.status, o.created_at,
+  const organizations = db.prepare(`SELECT o.id, o.name, o.status, o.created_at, o.plan, o.trial_ends_at,
     (SELECT COUNT(*) FROM org_members m WHERE m.org_id = o.id) AS member_count,
     (SELECT u.email FROM org_members m JOIN users u ON u.id = m.user_id WHERE m.org_id = o.id AND m.role = 'org.admin' LIMIT 1) AS admin_email,
     (SELECT COUNT(*) FROM documents d WHERE d.org_id = o.id AND d.kind = 'projects') AS project_count,
@@ -635,8 +766,9 @@ export function platformOverview() {
     (SELECT COALESCE(SUM(a.total_tokens), 0) FROM ai_calls a WHERE a.org_id = o.id AND a.created_at >= ?) AS month_tokens,
     (SELECT COALESCE(SUM(g.amount), 0) FROM org_quota_grants g WHERE g.org_id=o.id AND g.period=?) AS quota_granted,
     (SELECT COALESCE(SUM(q.amount), 0) FROM quota_task_usage q WHERE q.org_id=o.id AND q.period=? AND q.status='settled') AS quota_used,
-    (SELECT COALESCE(SUM(q.amount), 0) FROM quota_task_usage q WHERE q.org_id=o.id AND q.period=? AND q.status='reserved') AS quota_reserved
-    FROM orgs o WHERE o.id != 'bootstrap' ORDER BY o.created_at DESC`).all(monthStart.getTime(), period, period, period);
+    (SELECT COALESCE(SUM(q.amount), 0) FROM quota_task_usage q WHERE q.org_id=o.id AND q.period=? AND q.status='reserved') AS quota_reserved,
+    (SELECT COALESCE(SUM(q.cost_cny), 0) FROM quota_task_usage q WHERE q.org_id=o.id AND q.period=? AND q.status='settled') AS month_cost_cny
+    FROM orgs o WHERE o.id != 'bootstrap' ORDER BY o.created_at DESC`).all(monthStart.getTime(), period, period, period, period);
   const totals = db.prepare(`SELECT
     (SELECT COUNT(*) FROM orgs WHERE id != 'bootstrap') AS organizations,
     (SELECT COUNT(*) FROM users) AS users,
@@ -650,10 +782,59 @@ export function platformOverview() {
   for (const org of organizations) {
     org.quota_remaining = Math.max(0, org.quota_granted - org.quota_used - org.quota_reserved);
   }
-  const auditLogs = db.prepare(`SELECT l.id, l.action, l.target, l.created_at, u.email AS actor_email
-    FROM org_audit_logs l LEFT JOIN users u ON u.id = l.actor_user_id
-    ORDER BY l.created_at DESC LIMIT 100`).all();
-  return { totals: Object.fromEntries(Object.entries(totals).map(([key, value]) => [key, value || 0])), organizations, auditLogs };
+  const auditLogs = db.prepare(`SELECT l.id, l.action, l.target, l.details, l.created_at, u.email AS actor_email,
+      o.name AS org_name, o.id AS org_id
+    FROM org_audit_logs l
+      LEFT JOIN users u ON u.id = l.actor_user_id
+      LEFT JOIN orgs o ON o.id = l.org_id
+    ORDER BY l.created_at DESC LIMIT 200`).all();
+  return {
+    totals: Object.fromEntries(Object.entries(totals).map(([key, value]) => [key, value || 0])),
+    organizations,
+    auditLogs,
+    trendWeek: platformTrend('week'),
+    trendMonth: platformTrend('month'),
+  };
+}
+
+/* 平台趋势：按周(7天)或按月(30天)返回每日新增量与累计存量 */
+export function platformTrend(range = 'week') {
+  const days = range === 'month' ? 30 : 7;
+  const start = new Date();
+  start.setHours(0, 0, 0, 0);
+  start.setDate(start.getDate() - (days - 1));
+  const fromTs = start.getTime();
+  const dayOf = `strftime('%Y-%m-%d', created_at / 1000, 'unixepoch', 'localtime')`;
+  const byDay = sql => new Map(db.prepare(sql).all(fromTs).map(row => [row.day, row.total]));
+
+  const newUsers = byDay(`SELECT ${dayOf} AS day, COUNT(*) AS total FROM users WHERE created_at >= ? GROUP BY day`);
+  const newOrgs = byDay(`SELECT ${dayOf} AS day, COUNT(*) AS total FROM orgs WHERE id != 'bootstrap' AND created_at >= ? GROUP BY day`);
+  const newTasks = byDay(`SELECT ${dayOf} AS day, COUNT(*) AS total FROM tasks WHERE created_at >= ? GROUP BY day`);
+  const tokens = byDay(`SELECT ${dayOf} AS day, COALESCE(SUM(total_tokens), 0) AS total FROM ai_calls WHERE created_at >= ? GROUP BY day`);
+
+  // 区间开始前的存量作为累计曲线起点
+  let userStock = db.prepare('SELECT COUNT(*) AS n FROM users WHERE created_at < ?').get(fromTs).n || 0;
+  let orgStock = db.prepare(`SELECT COUNT(*) AS n FROM orgs WHERE id != 'bootstrap' AND created_at < ?`).get(fromTs).n || 0;
+
+  const series = [];
+  for (let i = 0; i < days; i += 1) {
+    const date = new Date(fromTs + i * 86400000);
+    const key = `${date.getFullYear()}-${`${date.getMonth() + 1}`.padStart(2, '0')}-${`${date.getDate()}`.padStart(2, '0')}`;
+    const addOrgs = newOrgs.get(key) || 0;
+    const addUsers = newUsers.get(key) || 0;
+    userStock += addUsers;
+    orgStock += addOrgs;
+    series.push({
+      date: key,
+      newOrgs: addOrgs,
+      newUsers: addUsers,
+      orgs: orgStock,
+      users: userStock,
+      tasks: newTasks.get(key) || 0,
+      tokens: tokens.get(key) || 0,
+    });
+  }
+  return series;
 }
 
 export function deleteSession(token) {
@@ -817,21 +998,29 @@ export function getOrgQuota(orgId) {
   const grants = db.prepare('SELECT COALESCE(SUM(amount),0) AS amount FROM org_quota_grants WHERE org_id=? AND period=?').get(orgId, period).amount;
   const usageRows = db.prepare(`SELECT user_id,
     COALESCE(SUM(CASE WHEN status='settled' THEN amount ELSE 0 END),0) AS used,
-    COALESCE(SUM(CASE WHEN status='reserved' THEN amount ELSE 0 END),0) AS reserved
+    COALESCE(SUM(CASE WHEN status='reserved' THEN amount ELSE 0 END),0) AS reserved,
+    COALESCE(SUM(CASE WHEN status='settled' THEN cost_cny ELSE 0 END),0) AS cost
     FROM quota_task_usage WHERE org_id=? AND period=? GROUP BY user_id`).all(orgId, period);
   const usageByUser = new Map(usageRows.map(row => [row.user_id, row]));
   const members = db.prepare(`SELECT u.id,u.email,m.role,COALESCE(a.amount,0) AS allocation
     FROM org_members m JOIN users u ON u.id=m.user_id
     LEFT JOIN member_quota_allocations a ON a.org_id=m.org_id AND a.user_id=m.user_id AND a.period=?
     WHERE m.org_id=? ORDER BY m.created_at`).all(period, orgId).map(member => {
-    const usage = usageByUser.get(member.id) || { used: 0, reserved: 0 };
-    return { ...member, ...usage, available: Math.max(0, member.allocation - usage.used - usage.reserved) };
+    const usage = usageByUser.get(member.id) || { used: 0, reserved: 0, cost: 0 };
+    return {
+      ...member,
+      used: usage.used,
+      reserved: usage.reserved,
+      costCny: Number((usage.cost || 0).toFixed(4)),
+      available: Math.max(0, member.allocation - usage.used - usage.reserved),
+    };
   });
   const used = usageRows.reduce((sum, row) => sum + row.used, 0);
   const reserved = usageRows.reduce((sum, row) => sum + row.reserved, 0);
+  const costCny = Number(usageRows.reduce((sum, row) => sum + (row.cost || 0), 0).toFixed(4));
   const remaining = Math.max(0, grants - used - reserved);
   const memberAvailable = members.reduce((sum, member) => sum + member.available, 0);
-  return { period, granted: grants, used, reserved, remaining, unallocated: Math.max(0, remaining - memberAvailable), members };
+  return { period, granted: grants, used, reserved, remaining, costCny, unallocated: Math.max(0, remaining - memberAvailable), members };
 }
 
 export function getMemberQuota(orgId, userId) {
@@ -839,6 +1028,22 @@ export function getMemberQuota(orgId, userId) {
   const member = summary.members.find(item => item.id === userId);
   if (!member) return null;
   return { period: summary.period, allocation: member.allocation, used: member.used, reserved: member.reserved, available: member.available };
+}
+
+export const ORG_PLANS = ['free', 'trial', 'pro', 'enterprise'];
+
+export function setOrgPlan({ orgId, plan, actorUserId }) {
+  if (!ORG_PLANS.includes(plan)) throw new Error(`套餐必须是 ${ORG_PLANS.join(' / ')} 之一`);
+  const org = db.prepare("SELECT id, plan FROM orgs WHERE id=? AND id!='bootstrap'").get(orgId);
+  if (!org) return null;
+  const trialEndsAt = plan === 'trial' ? Date.now() + 30 * 86400000 : null;
+  db.exec('BEGIN IMMEDIATE');
+  try {
+    db.prepare('UPDATE orgs SET plan=?, trial_ends_at=? WHERE id=?').run(plan, trialEndsAt, orgId);
+    recordOrgAudit({ orgId, actorUserId, action: 'org.plan.changed', target: orgId, details: { from: org.plan, to: plan } });
+    db.exec('COMMIT');
+  } catch (error) { db.exec('ROLLBACK'); throw error; }
+  return db.prepare('SELECT id, plan, trial_ends_at FROM orgs WHERE id=?').get(orgId);
 }
 
 export function grantOrgQuota({ orgId, amount, actorUserId }) {
@@ -874,6 +1079,152 @@ export function setMemberQuota({ orgId, userId, amount, actorUserId }) {
     db.exec('COMMIT');
   } catch (error) { db.exec('ROLLBACK'); throw error; }
   return getOrgQuota(orgId);
+}
+
+/* ===== 平台用户目录（superadmin） ===== */
+
+const isSuperadminEmail = email => config.superadminEmails.includes(String(email || '').toLowerCase());
+
+const platformUserRow = row => ({
+  id: row.id,
+  email: row.email,
+  role: isSuperadminEmail(row.email) ? 'superadmin' : row.role,
+  orgRole: row.role,
+  orgId: row.org_id,
+  orgName: row.org_name,
+  orgStatus: row.org_status,
+  status: row.status === 'disabled' ? 'disabled' : 'active',
+  lastLoginAt: row.last_login_at || null,
+  lastSeenAt: row.last_seen_at || null,
+  createdAt: row.created_at,
+  taskCount: row.task_count || 0,
+});
+
+/**
+ * 跨组织用户列表。role 可以是 superadmin / org.admin / org.user。
+ */
+export function listPlatformUsers({ role, status, orgId, query, limit = 500 } = {}) {
+  const clauses = [];
+  const values = [];
+  if (orgId) { clauses.push('o.id = ?'); values.push(orgId); }
+  if (status === 'active') clauses.push("u.status != 'disabled'");
+  if (status === 'disabled') clauses.push("u.status = 'disabled'");
+  if (query) { clauses.push('(lower(u.email) LIKE ? OR lower(o.name) LIKE ?)'); values.push(`%${String(query).toLowerCase()}%`, `%${String(query).toLowerCase()}%`); }
+  const where = clauses.length ? `WHERE ${clauses.join(' AND ')}` : '';
+  const rows = db.prepare(`SELECT u.id,u.email,u.status,u.created_at,u.last_login_at,u.last_seen_at,
+    m.role,o.id AS org_id,o.name AS org_name,o.status AS org_status,
+    (SELECT COUNT(*) FROM tasks t WHERE t.created_by=u.id) AS task_count
+    FROM users u JOIN org_members m ON m.user_id=u.id JOIN orgs o ON o.id=m.org_id
+    ${where} ORDER BY u.created_at DESC LIMIT ?`).all(...values, Math.max(1, Math.min(2000, limit)));
+  const items = rows.map(platformUserRow);
+  return role ? items.filter(user => user.role === role) : items;
+}
+
+export function platformUserTotals() {
+  const row = db.prepare(`SELECT
+    (SELECT COUNT(*) FROM users) AS users,
+    (SELECT COUNT(*) FROM users WHERE status='disabled') AS disabled,
+    (SELECT COUNT(*) FROM org_members WHERE role='org.admin') AS org_admins,
+    (SELECT COUNT(*) FROM orgs WHERE id!='bootstrap') AS organizations`).get();
+  const all = listPlatformUsers({ limit: 2000 });
+  return {
+    users: row.users || 0,
+    disabled: row.disabled || 0,
+    orgAdmins: row.org_admins || 0,
+    superadmins: all.filter(user => user.role === 'superadmin').length,
+    organizations: row.organizations || 0,
+  };
+}
+
+export function setPlatformUserStatus({ userId, status, actorUserId }) {
+  if (!['active', 'disabled'].includes(status)) throw new Error('账号状态无效');
+  const user = db.prepare('SELECT u.id,u.email,m.org_id,m.role FROM users u LEFT JOIN org_members m ON m.user_id=u.id WHERE u.id=?').get(userId);
+  if (!user) return null;
+  if (isSuperadminEmail(user.email) && status === 'disabled') throw new Error('平台管理员账号不能在面板停用，请先从 SUPERADMIN_EMAILS 移除');
+  db.prepare('UPDATE users SET status=? WHERE id=?').run(status, userId);
+  // 停用后立即撤销所有会话
+  if (status === 'disabled') db.prepare('DELETE FROM sessions WHERE user_id=?').run(userId);
+  if (user.org_id) {
+    recordOrgAudit({ orgId: user.org_id, actorUserId, action: status === 'disabled' ? 'user.disabled' : 'user.enabled', target: user.email });
+  }
+  return { id: user.id, email: user.email, status };
+}
+
+/** 强制某用户的全部会话失效 */
+export function revokeUserSessions({ userId, actorUserId = null }) {
+  const user = db.prepare('SELECT u.id,u.email,m.org_id FROM users u LEFT JOIN org_members m ON m.user_id=u.id WHERE u.id=?').get(userId);
+  if (!user) return null;
+  const result = db.prepare('DELETE FROM sessions WHERE user_id=?').run(userId);
+  if (user.org_id) recordOrgAudit({ orgId: user.org_id, actorUserId, action: 'user.sessions_revoked', target: user.email });
+  return { id: user.id, email: user.email, sessions: Number(result.changes || 0) };
+}
+
+/* ===== 组织设置（org.admin） ===== */
+
+export function getOrganizationProfile(orgId) {
+  const org = db.prepare("SELECT id,name,status,created_at FROM orgs WHERE id=? AND id!='bootstrap'").get(orgId);
+  if (!org) return null;
+  const memberCount = db.prepare('SELECT COUNT(*) AS n FROM org_members WHERE org_id=?').get(orgId).n || 0;
+  const admin = db.prepare("SELECT u.email FROM org_members m JOIN users u ON u.id=m.user_id WHERE m.org_id=? AND m.role='org.admin' ORDER BY m.created_at LIMIT 1").get(orgId);
+  return { id: org.id, name: org.name, status: org.status, createdAt: org.created_at, memberCount, adminEmail: admin?.email || null };
+}
+
+export function renameOrganization({ orgId, name, actorUserId }) {
+  const orgName = String(name || '').trim();
+  if (!orgName || orgName.length > 80) throw new Error('组织名称须为 1 至 80 个字符');
+  const org = db.prepare("SELECT name FROM orgs WHERE id=? AND id!='bootstrap'").get(orgId);
+  if (!org) return null;
+  if (org.name === orgName) return getOrganizationProfile(orgId);
+  db.prepare('UPDATE orgs SET name=? WHERE id=?').run(orgName, orgId);
+  recordOrgAudit({ orgId, actorUserId, action: 'organization.renamed', target: orgName, details: { from: org.name, to: orgName } });
+  return getOrganizationProfile(orgId);
+}
+
+/** Org 级用量与任务汇总（管理面板“用量与任务”） */
+export function orgUsageSummary(days = 30) {
+  const from = Date.now() - Math.max(1, Math.min(90, Number(days) || 30)) * 86400000;
+  const orgId = currentOrgId();
+  const admin = currentRole() !== 'org.user';
+  const ownerClause = admin ? '' : ' AND created_by = ?';
+  const ownerArg = admin ? [] : [currentUserId()];
+  const taskRow = db.prepare(`SELECT
+    COUNT(*) AS total,
+    SUM(CASE WHEN status='done' THEN 1 ELSE 0 END) AS done,
+    SUM(CASE WHEN status='failed' THEN 1 ELSE 0 END) AS failed,
+    SUM(CASE WHEN status IN ('queued','running') THEN 1 ELSE 0 END) AS running
+    FROM tasks WHERE org_id=? AND created_at>=?${ownerClause}`).get(orgId, from, ...ownerArg);
+  const callRow = db.prepare(`SELECT
+    COUNT(*) AS calls,
+    COALESCE(SUM(total_tokens),0) AS tokens,
+    COALESCE(SUM(cost_cny),0) AS cost
+    FROM ai_calls WHERE org_id=? AND created_at>=?${ownerClause}`).get(orgId, from, ...ownerArg);
+  const recent = db.prepare(`SELECT t.id,t.type,t.status,t.prompt,t.created_at,t.cost_ms,u.email AS user_email
+    FROM tasks t LEFT JOIN users u ON u.id=t.created_by
+    WHERE t.org_id=? AND t.created_at>=?${admin ? '' : ' AND t.created_by=?'}
+    ORDER BY t.created_at DESC LIMIT 12`).all(orgId, from, ...ownerArg);
+  return {
+    days: Number(days) || 30,
+    tasks: {
+      total: taskRow.total || 0,
+      done: taskRow.done || 0,
+      failed: taskRow.failed || 0,
+      running: taskRow.running || 0,
+    },
+    calls: {
+      calls: callRow.calls || 0,
+      tokens: callRow.tokens || 0,
+      cost: Number((callRow.cost || 0).toFixed(4)),
+    },
+    recent: recent.map(row => ({
+      id: row.id,
+      type: row.type,
+      status: row.status,
+      prompt: row.prompt,
+      costMs: row.cost_ms,
+      createdAt: row.created_at,
+      userEmail: row.user_email,
+    })),
+  };
 }
 
 export function registerFile(path, orgId = scoped() || 'bootstrap') {

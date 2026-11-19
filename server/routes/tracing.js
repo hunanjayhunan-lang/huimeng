@@ -7,8 +7,8 @@ const router = Router();
 router.use((req, res, next) => {
   if (req.role === 'superadmin') {
     const orgId = typeof req.query.orgId === 'string' ? req.query.orgId : '';
-    if (!orgId || orgId === 'all') return next();
-    if (!orgId) return res.status(400).json({ error: '请选择要查看的组织' });
+    // 平台管理员：all / 缺省 = 跨组织查看全部；null 表示不做组织过滤
+    if (!orgId || orgId === 'all') return inOrg(null, next);
     if (!organizationExists(orgId)) return res.status(404).json({ error: '组织不存在' });
     return inOrg(orgId, next);
   }
@@ -45,7 +45,7 @@ router.get('/tracing/calls', (req, res) => {
 
 /** 任务列表（带事件数 / 最后一个事件） */
 router.get('/tracing/tasks', (req, res) => {
-  const limit = Math.min(100, Math.max(1, Number(req.query.limit) || 20));
+  const limit = Math.min(500, Math.max(1, Number(req.query.limit) || 20));
   let cursor = null;
   if (req.query.cursor) {
     try {
@@ -77,6 +77,7 @@ router.get('/tracing/tasks/:id', (req, res) => {
       params: task.params,
       remoteTaskId: task.remote_task_id,
       resultUrl: task.result_url,
+      localPath: task.local_path,
       error: task.error,
       costMs: task.cost_ms,
       attempts: task.attempts,

@@ -102,14 +102,33 @@ const TAB_ROUTES = {
   登录: '/login',
   邀请: '/invite',
 };
-const ADMIN_PATHS = { '/admin/overview': '平台概览', '/admin/organizations': '组织管理', '/admin/users': '用户与权限', '/admin/usage': '平台用量', '/admin/tracing': '调用追踪', '/admin/audit': '操作审计' };
+// 平台/组织管理：两套面板共用同一工作区，各自有自己的 tab 路径
+const ADMIN_PATHS = {
+  '/admin': '平台概览',
+  '/admin/overview': '平台概览',
+  '/admin/organizations': '组织管理',
+  '/admin/users': '用户与权限',
+  '/admin/usage': '平台用量',
+  '/admin/tracing': '调用追踪',
+  '/admin/audit': '操作审计',
+  '/admin/org/overview': '概览',
+  '/admin/org/members': '成员管理',
+  '/admin/org/quota': '额度分配',
+  '/admin/org/projects': '项目管理',
+  '/admin/org/usage': '用量与任务',
+  '/admin/org/tracing': '调用追踪',
+  '/admin/org/audit': '审计记录',
+  '/admin/org/settings': '组织设置',
+};
+const isAdminPath = path => Object.hasOwn(ADMIN_PATHS, path)
+  || path === '/platform/organizations'
+  || path.startsWith('/platform/organizations/');
 
 const normalizePath = path => (path.replace(/\/+$/, '') || '/');
 
 const tabFromPath = () => {
   const path = normalizePath(window.location.pathname);
-  if (Object.hasOwn(ADMIN_PATHS, path)) return '管理';
-  if (path === '/platform/organizations' || path.startsWith('/platform/organizations/')) return '管理';
+  if (isAdminPath(path)) return '管理';
   const found = Object.entries(TAB_ROUTES).find(([, route]) => route === path);
   return found ? found[0] : '首页';
 };
@@ -265,7 +284,13 @@ function App() {
       setSession(value);
       if (value.role === 'superadmin' || value.role === 'org.admin') {
         setActiveTab('管理');
-        if (!window.location.pathname.startsWith('/admin/') && !window.location.pathname.startsWith('/platform/organizations')) window.history.replaceState({ tab: '管理' }, '', '/admin');
+        const current = normalizePath(window.location.pathname);
+        if (!isAdminPath(current)) {
+          window.history.replaceState({ tab: '管理' }, '', value.role === 'superadmin' ? '/admin/overview' : '/admin/org/overview');
+        } else if (value.role === 'org.admin' && current.startsWith('/platform/')) {
+          // 普通组织管理员误入平台页面，归一到自家面板
+          window.history.replaceState({ tab: '管理' }, '', '/admin/org/overview');
+        }
       }
       setSessionReady(true);
     })
@@ -276,7 +301,7 @@ function App() {
     const onPop = () => setActiveTab(tabFromPath());
     window.addEventListener('popstate', onPop);
     // 未知路径归一到首页，不留死链
-    if (!Object.values(TAB_ROUTES).includes(normalizePath(window.location.pathname)) && !Object.hasOwn(ADMIN_PATHS, normalizePath(window.location.pathname)) && !normalizePath(window.location.pathname).startsWith('/platform/organizations')) {
+    if (!Object.values(TAB_ROUTES).includes(normalizePath(window.location.pathname)) && !isAdminPath(normalizePath(window.location.pathname))) {
       window.history.replaceState({ tab: '首页' }, '', APP_HOME);
     }
     return () => window.removeEventListener('popstate', onPop);
@@ -342,7 +367,9 @@ function App() {
     navigate(role === 'superadmin' || role === 'org.admin' ? '管理' : '首页');
   }} />;
   const logout = async () => { try { await api.logout(); } catch { /* 本地退出仍应可用 */ } finally { setToken(''); setSession(null); navigate('登录'); } };
-  if (isAdmin && activeTab === '管理') return <div className="app-shell admin-shell"><header className="topbar"><div className="brand"><div className="brand-mark">AI</div><strong>AI绘梦</strong><span className="brand-sub">{session.role === 'superadmin' ? 'SaaS 平台管理' : '组织管理'}</span></div><div className="top-actions"><div className="profile"><div className="avatar"><UserRound size={19}/></div><div><b>{session.user.email}</b><small>{session.role === 'superadmin' ? '平台管理员' : '组织管理员'}</small></div></div><button className="pill" onClick={() => navigate('首页')}>进入创作工作台</button><button className="pill" onClick={logout}>退出登录</button></div></header>{session.role === 'superadmin' ? <SuperadminPage /> : <AdminPage org={session.org} user={session.user} />}</div>;
+  if (isAdmin && activeTab === '管理') return <div className="app-shell admin-shell">{session.role === 'superadmin'
+    ? <SuperadminPage user={session.user} org={session.org} role={session.role} onLogout={logout} onNavigate={navigate} />
+    : <AdminPage org={session.org} user={session.user} role={session.role} onLogout={logout} onNavigate={navigate} />}</div>;
 
   return (
     <div className="app-shell">
