@@ -1,11 +1,17 @@
 import { useMemo, useState } from 'react';
 import {
-  BarChart3, CheckCircle2, Eye, Heart, MessageCircle, Plus, RefreshCw,
+  BarChart3, CheckCircle2, ExternalLink, Eye, Heart, MessageCircle, Plus, RefreshCw,
   Search, Share2, Sparkles, Trash2, TrendingUp, UserPlus, Users, Video, X,
 } from 'lucide-react';
 import { PanelHeading } from './AdminWorkspace.jsx';
 
 const STORAGE_KEY = 'huimeng.admin.douyin.accounts';
+
+// The DTK instance that actually downloads media. Override with
+// VITE_DTK_URL in .env when it does not run on this machine. The console is a
+// separate application with its own session, so this is a link out rather than
+// an embed: iframes would show its login screen, not the downloads list.
+const DTK_URL = (import.meta.env?.VITE_DTK_URL || 'http://127.0.0.1:8000').replace(/\/+$/, '');
 
 const DEFAULT_ACCOUNTS = [
   {
@@ -279,6 +285,15 @@ export default function DouyinOpsPanel({ onNotify }) {
               <option value="all">全部账号 ({accounts.length})</option>
               {accounts.map(a => <option key={a.id} value={a.id}>{a.name}</option>)}
             </select>
+            <a
+              className="admin-outline douyin-dtk-link"
+              href={`${DTK_URL}/downloads`}
+              target="_blank"
+              rel="noopener noreferrer"
+              title="在新的标签页打开下载管理"
+            >
+              <ExternalLink size={15} />下载管理
+            </a>
             <button type="button" className="admin-primary" onClick={() => setBindOpen(true)}>
               <Plus size={15} />绑定抖音账号
             </button>

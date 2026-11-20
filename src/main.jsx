@@ -13,6 +13,8 @@ import {
   ChevronDown,
   ChevronRight,
   FolderKanban,
+  Download,
+  ExternalLink,
 } from 'lucide-react';
 import './style.css';
 import AdminWorkspace from './components/AdminWorkspace.jsx';
@@ -35,20 +37,32 @@ import { api, setToken } from './api.js';
 // 主题覆盖必须最后加载：同优先级下才能盖住各页面自己的配色
 import './theme.css';
 
+// `label` is the internal tab key: it is compared against activeTab, used as a
+// route key in TAB_ROUTES, and pushed into history state. Renaming it would
+// break all of those. `display` overrides only what the sidebar and breadcrumb
+// show, so the tab can read "项目" while every comparison keeps using "工作台".
 const navItems = [
   { icon: Home, label: '首页' },
-  { icon: Layers, label: '工作台' },
+  { icon: Layers, label: '工作台', display: '项目' },
 
   { icon: Video, label: '成片' },
 
 
   { icon: FileText, label: '剧本' },
 
+
+  { icon: Download, label: '下载管理' },
+
   { icon: ImageIcon, label: '资产' },
 
 
 
 ];
+
+// The DTK console runs as its own application with its own session, so the
+// download tab links out to it rather than embedding it. Set VITE_DTK_URL in
+// .env when it does not live on this machine.
+const DTK_URL = (import.meta.env?.VITE_DTK_URL || 'http://127.0.0.1:8000').replace(/\/+$/, '');
 
 // 每个 tab 一个 URL：直接用浏览器地址栏、前进后退、刷新都能保持
 // 工作台统一挂在 /app 下；/admin、/login、/invite 不属于工作台，保持独立
@@ -61,6 +75,8 @@ const TAB_ROUTES = {
 
 
   剧本: '/app/scripts',
+
+  下载管理: '/app/downloads',
 
   资产: '/app/assets',
 
@@ -226,7 +242,7 @@ function App() {
       workspaceTitle="AI绘梦"
       workspaceSubtitle="创作工作台"
       navLabel="工作台"
-      tabs={navItems.map(({ icon, label }) => ({ key: label, label, icon }))}
+      tabs={navItems.map(({ icon, label, display }) => ({ key: label, label: display || label, icon }))}
       activeTab={activeTab}
       onTabChange={tab => {
         setSelectedProject(null);
@@ -301,7 +317,7 @@ function App() {
           })}
         </div>
       }
-      breadcrumbParent="工作台"
+      breadcrumbParent={activeTab === '工作台' ? '项目' : '工作台'}
       breadcrumbCurrent={activeTab === '工作台' && selectedProject ? selectedProject.name : undefined}
       user={session.user}
       org={session.org}
@@ -323,6 +339,34 @@ function App() {
         />
 ) : activeTab === '工作台' ? (
         <WorkspacePage onNavigate={navigate} role={session.role} projectId={selectedProject?.id} />
+      ) : activeTab === '下载管理' ? (
+        /* 下载管理：DTK 控制台是独立应用（自己的登录会话），所以这里不嵌入
+           iframe——那样只会看到它的登录页。整个 tab 直接跳过去。 */
+        <main className="main-content">
+          <div className="tab-placeholder-page">
+            <div className="placeholder-card">
+              <div className="placeholder-icon-wrap">
+                <Download size={36} />
+              </div>
+              <h2>下载管理</h2>
+              <p className="placeholder-sub">抖音 / TikTok 视频下载与归档由 DTK 控制台提供，在独立标签页中打开。</p>
+              <div className="placeholder-actions">
+                <a
+                  className="primary"
+                  href={`${DTK_URL}/downloads`}
+                  target="_blank"
+                  rel="noopener noreferrer"
+                  style={{ display: 'inline-flex', alignItems: 'center', gap: 8, textDecoration: 'none' }}
+                >
+                  <ExternalLink size={16} /> 打开下载管理
+                </a>
+              </div>
+              <p className="placeholder-sub" style={{ marginTop: 14 }}>
+                DTK 控制台：<code>{DTK_URL}</code>
+              </p>
+            </div>
+          </div>
+        </main>
       ) : activeTab === '创作' ? (
         <CreateWorkbench mode={creationMode} projectId={selectedProject?.id} projectName={selectedProject?.name} onModeChange={setCreationMode} onOpenScripts={() => navigate('剧本')} />
       ) : activeTab === '成片' ? (
