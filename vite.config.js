@@ -5,6 +5,9 @@ import react from '@vitejs/plugin-react';
 export default defineConfig({
   plugins: [react()],
   server: {
+    // 显式绑定 IPv4，避免 Windows 代理/防火墙拦截 IPv6 回环 [::1]
+    host: '127.0.0.1',
+    strictPort: true,
     proxy: {
       '/api': {
         target: 'http://127.0.0.1:3001',

@@ -468,7 +468,15 @@ export function tracingDailySeries(fromTs) {
 
 /* ===== 通用文档（kind: scripts / projects / canvases / breakdowns / messages） ===== */
 
-const docToObject = row => (row ? { id: row.id, kind: row.kind, ...JSON.parse(row.data || '{}'), createdAt: row.created_at, updatedAt: row.updated_at } : null);
+const docToObject = row => (row ? {
+  id: row.id,
+  kind: row.kind,
+  ...JSON.parse(row.data || '{}'),
+  createdBy: row.created_by || null,
+  createdByEmail: row.created_by_email || null,
+  createdAt: row.created_at,
+  updatedAt: row.updated_at,
+} : null);
 
 const docGet = id => {
   const ownerClause = userOnly() ? ' AND created_by = ?' : '';
@@ -506,11 +514,11 @@ export function removeDocument(id) {
 }
 
 export function listDocuments(kind, limit = 100) {
-  const ownerClause = userOnly() ? ' AND created_by = ?' : '';
+  const ownerClause = userOnly() ? ' AND d.created_by = ?' : '';
   const args = [kind, scoped(), scoped()];
   if (userOnly()) args.push(currentUserId());
   args.push(limit);
-  return db.prepare(`SELECT * FROM documents WHERE kind = ? AND (? IS NULL OR org_id = ?)${ownerClause} ORDER BY updated_at DESC LIMIT ?`)
+  return db.prepare(`SELECT d.*, u.email AS created_by_email FROM documents d LEFT JOIN users u ON u.id = d.created_by WHERE d.kind = ? AND (? IS NULL OR d.org_id = ?)${ownerClause} ORDER BY d.updated_at DESC LIMIT ?`)
     .all(...args)
     .map(docToObject);
 }
@@ -1756,24 +1764,60 @@ export function createMemberReview({ orgId, projectName, title, category = 'asse
   return db.prepare('SELECT * FROM member_reviews WHERE id=?').get(id);
 }
 
-export function decideMemberReview({ id, orgId, allOrgs = false, action, note = '', actorUserId, actorEmail }) {
+export function decideMemberReview({ id, orgId, allOrgs = false, action, note = '', quota = null, actorUserId, actorEmail }) {
   if (!['approve', 'reject'].includes(action)) throw new Error('审核动作无效');
+  // 通过时必须给出分配积分：它是审核决定的一部分，不是事后补充。
+  // 驳回不涉及额度，传了也忽略。
+  if (action === 'approve') {
+    const amount = Number(quota);
+    if (!Number.isSafeInteger(amount) || amount <= 0) throw new Error('请填写要分配给提交人的积分（正整数）');
+  }
   const row = allOrgs
     ? db.prepare('SELECT * FROM member_reviews WHERE id=?').get(id)
     : db.prepare('SELECT * FROM member_reviews WHERE id=? AND org_id=?').get(id, orgId);
   if (!row) return null;
+  if (row.status !== 'pending') throw new Error('这条记录已经处理过了');
   const nextStatus = action === 'approve' ? 'approved' : 'rejected';
   const now = Date.now();
-  db.prepare(`UPDATE member_reviews
-    SET status=?, reviewer_id=?, reviewer_email=?, review_note=?, reviewed_at=?
-    WHERE id=?`)
-    .run(nextStatus, actorUserId || null, actorEmail || '', String(note || '').trim() || null, now, id);
-  recordOrgAudit({
-    orgId: row.org_id,
-    actorUserId,
-    action: action === 'approve' ? 'review.approved' : 'review.rejected',
-    target: row.title,
-    details: { note: String(note || '').trim() || undefined },
-  });
+
+  // 审核决定与额度增加必须原子完成：只写一半会产生「已通过但积分没到手」，
+  // 而审核员没有任何入口事后补。所以两件事共用一个事务。
+  db.exec('BEGIN IMMEDIATE');
+  try {
+    db.prepare(`UPDATE member_reviews
+      SET status=?, reviewer_id=?, reviewer_email=?, review_note=?, reviewed_at=?
+      WHERE id=?`)
+      .run(nextStatus, actorUserId || null, actorEmail || '', String(note || '').trim() || null, now, id);
+    // 审核通过的额度直接给提交内容的那名成员，按「增加」而不是「设为」：
+    // 审核是对单次产出的奖励，不该覆盖他本月已有的额度。
+    if (action === 'approve') {
+      const period = quotaPeriod();
+      const summary = getOrgQuota(row.org_id);
+      const member = summary.members.find(item => item.id === row.submitted_by);
+      if (!member) throw new Error('提交人已不在当前组织，无法分配积分');
+      const next = member.allocation + Number(quota);
+      // 增加后的额度不能把组织剩余额度吃完：othersAvailable 是别人已划走但未用完的部分，
+      // 它不能被回收，但对「还能再分多少」无关。这里只需盯剩余额度。
+      if (Number(quota) > summary.remaining) {
+        throw new Error(`组织当前剩余额度不足，最多还能分配 ${Math.max(0, summary.remaining)} 点`);
+      }
+      db.prepare(`INSERT INTO member_quota_allocations(org_id,user_id,period,amount,actor_user_id,updated_at) VALUES(?,?,?,?,?,?)
+        ON CONFLICT(org_id,user_id,period) DO UPDATE SET amount=excluded.amount,actor_user_id=excluded.actor_user_id,updated_at=excluded.updated_at`)
+        .run(row.org_id, row.submitted_by, period, next, actorUserId || null, now);
+      recordOrgAudit({
+        orgId: row.org_id, actorUserId, action: 'quota.member.allocated', target: member.email,
+        details: { period, from: member.allocation, to: next, reason: 'review.approved', reviewId: id },
+      });
+    }
+    recordOrgAudit({
+      orgId: row.org_id,
+      actorUserId,
+      action: action === 'approve' ? 'review.approved' : 'review.rejected',
+      target: row.title,
+      details: { note: String(note || '').trim() || undefined, quota: action === 'approve' ? Number(quota) : undefined },
+    });
+    db.exec('COMMIT');
+  } catch (error) { db.exec('ROLLBACK'); throw error; }
+
   return db.prepare('SELECT r.*, o.name AS org_name FROM member_reviews r LEFT JOIN orgs o ON o.id = r.org_id WHERE r.id=?').get(id);
 }

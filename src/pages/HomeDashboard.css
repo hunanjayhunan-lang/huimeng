@@ -358,33 +358,6 @@
 .hd-summary-dot.run { background: #2f6fb0; }
 .hd-summary-dot.new { background: #b5791c; }
 
-.hd-quick-grid {
-  display: grid;
-  grid-template-columns: 1fr 1fr;
-  gap: 8px;
-  padding: 12px 14px 16px;
-}
-.hd-quick-grid button {
-  display: flex;
-  align-items: center;
-  gap: 7px;
-  padding: 11px 12px;
-  border: 1px solid #ebe3cf;
-  border-radius: 10px;
-  background: #fbf8ef;
-  color: #44526a;
-  font-family: inherit;
-  font-size: 12.5px;
-  cursor: pointer;
-  transition: all 0.15s ease;
-}
-.hd-quick-grid button:hover {
-  border-color: #d4c398;
-  background: #fff;
-  transform: translateY(-1px);
-}
-.hd-quick-grid button svg { color: var(--accent-teal); flex: none; }
-
 /* ---------- 响应式 ---------- */
 @media (max-width: 1100px) {
   .hd-stats { grid-template-columns: repeat(2, 1fr); }

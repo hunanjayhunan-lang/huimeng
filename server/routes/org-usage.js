@@ -45,6 +45,8 @@ router.post('/org/reviews/:id/decision', requirePermission('review.decide'), (re
       allOrgs: req.role === 'superadmin',
       action: req.body?.action,
       note: req.body?.note || '',
+      // 审核通过时同时分配积分，值由前端对话框必填。
+      quota: req.body?.quota,
       actorUserId: req.user?.id,
       actorEmail: req.user?.email,
     });

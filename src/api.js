@@ -175,7 +175,7 @@ export const api = {
   },
   orgReviews: (status = 'all') => request(`/org/reviews?status=${encodeURIComponent(status)}`),
   submitOrgReview: payload => request('/org/reviews', { method: 'POST', body: JSON.stringify(payload) }),
-  decideOrgReview: (id, action, note = '') => request(`/org/reviews/${encodeURIComponent(id)}/decision`, { method: 'POST', body: JSON.stringify({ action, note }) }),
+  decideOrgReview: (id, action, note = '', quota = null) => request(`/org/reviews/${encodeURIComponent(id)}/decision`, { method: 'POST', body: JSON.stringify({ action, note, ...(quota != null ? { quota } : {}) }) }),
 };
 
 export const setToken = value => {

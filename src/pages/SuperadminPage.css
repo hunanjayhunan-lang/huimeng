@@ -382,10 +382,22 @@
 .admin-workspace .admin-toolbar { border-bottom: 1px solid #eceef1; }
 .admin-workspace .quota-allocation-card { padding: 0 18px 4px; }
 
-/* 积分分配表：多一列“实际花费”，网格相应加宽 */
+/* 积分分配表：多一列“实际花费”，网格相应加宽。
+   第一列 32px 是行首复选框，和 style.css 的基准定义保持一致——
+   漏掉它会让整行左移一格，“设置积分”列被挤出容器，表头与数据两端就对不齐。 */
 .admin-workspace .quota-table-head,
 .admin-workspace .quota-member-row {
-  grid-template-columns: minmax(180px, 1.5fr) repeat(4, minmax(58px, 0.6fr)) minmax(150px, 1.2fr);
+  grid-template-columns: 32px minmax(180px, 1.5fr) minmax(120px, 1fr) 92px 104px minmax(150px, 1.1fr);
+  justify-items: start;
+}
+/* 数值类列内容居中，列首尾对齐 */
+.admin-workspace .quota-table-head > span:not(:nth-child(2)),
+.admin-workspace .quota-member-row > span:not(:nth-child(2)) {
+  justify-self: center;
+}
+.admin-workspace .quota-table-head > span:first-child,
+.admin-workspace .quota-member-row > span:first-child {
+  justify-self: start;
 }
 .quota-cost { color: #8a6d3b; font-variant-numeric: tabular-nums; }
 

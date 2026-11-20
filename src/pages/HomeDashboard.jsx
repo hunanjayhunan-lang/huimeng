@@ -5,11 +5,8 @@ import {
   FileText,
   FolderKanban,
   Image as ImageIcon,
-  Layers,
   Loader2,
-  Play,
   Plus,
-  Sparkles,
   Video,
   Wand2,
 } from 'lucide-react';
@@ -277,7 +274,7 @@ export default function HomeDashboard({ user, org, onNavigate, onOpenProject }) 
           )}
         </section>
 
-        {/* 右侧：本周概览 + 快速入口 */}
+        {/* 右侧：本周概览 */}
         <aside className="hd-side">
           <section className="hd-panel hd-side-card">
             <div className="hd-panel-head">
@@ -291,20 +288,6 @@ export default function HomeDashboard({ user, org, onNavigate, onOpenProject }) 
               <li><span className="hd-summary-dot run" aria-hidden="true" /><span>进行中任务</span><b>{counts.tasks} 个</b></li>
               <li><span className="hd-summary-dot new" aria-hidden="true" /><span>新入库资产</span><b>{counts.assets} 张</b></li>
             </ul>
-          </section>
-
-          <section className="hd-panel hd-side-card">
-            <div className="hd-panel-head">
-              <div>
-                <h2>快捷入口</h2>
-              </div>
-            </div>
-            <div className="hd-quick-grid">
-              <button type="button" onClick={() => onNavigate('创作')}><Sparkles size={16} />开始创作</button>
-              <button type="button" onClick={() => onNavigate('画布')}><Layers size={16} />无限画布</button>
-              <button type="button" onClick={() => onNavigate('资产')}><ImageIcon size={16} />资产库</button>
-              <button type="button" onClick={() => onNavigate('智能体')}><Play size={16} />智能体</button>
-            </div>
           </section>
         </aside>
       </div>

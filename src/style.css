@@ -1552,6 +1552,13 @@ textarea:focus-visible,
   border-radius: 7px;
   font: 12px var(--font-sans);
 }
+/* 通过审核对话框的说明文字 */
+.review-approve-hint {
+  margin-top: 12px !important;
+  color: #89929b;
+  font-size: 11px;
+  line-height: 1.6;
+}
 .review-btn-reject {
   height: 32px;
   padding: 0 12px;
@@ -1831,4 +1838,432 @@ textarea:focus-visible,
 
 @media (max-width: 960px) {
   .douyin-grid { grid-template-columns: 1fr; }
+}
+
+
+/* ---------- /admin/org/members 角色管理渲染优化 ---------- */
+.member-table-card .admin-toolbar {
+  flex-wrap: wrap;
+  gap: 10px 12px;
+}
+.role-filter-pills {
+  display: inline-flex;
+  flex-wrap: wrap;
+  gap: 4px;
+  padding: 3px;
+  border: 1px solid #e4e7ec;
+  border-radius: 9px;
+  background: #f8f9fb;
+}
+.role-filter-pills button {
+  padding: 5px 10px;
+  border: 0;
+  border-radius: 6px;
+  background: transparent;
+  color: #5d6673;
+  font: 500 12px var(--font-sans);
+  cursor: pointer;
+  transition: background .12s, color .12s;
+}
+.role-filter-pills button:hover { color: #1f252d; }
+.role-filter-pills button.is-active {
+  background: #fff;
+  color: #1f252d;
+  font-weight: 600;
+  box-shadow: 0 1px 2px rgba(16, 24, 40, 0.08);
+}
+
+.member-table-card .table-head,
+.member-table-card .table-row {
+  grid-template-columns: minmax(220px, 1.8fr) minmax(140px, 1fr) minmax(96px, 0.7fr) 116px;
+}
+.table-head-actions,
+.table-row-actions {
+  display: flex;
+  justify-content: flex-end;
+  align-items: center;
+}
+.member-table-card .member-info { min-width: 0; }
+.member-table-card .member-info b,
+.member-table-card .member-info small {
+  display: block;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.member-table-card .member-info b { color: #1f252d; font-size: 13px; font-weight: 600; }
+.member-table-card .member-info small { margin-top: 2px; color: #7d8693; font-size: 11px; }
+
+.member-role-cell { display: flex; align-items: center; }
+.role-select {
+  height: 32px;
+  padding: 0 10px;
+  border: 1px solid #dce1e8;
+  border-radius: 8px;
+  background: #fff;
+  color: #343d48;
+  font: 500 12px var(--font-sans);
+  cursor: pointer;
+  outline: none;
+  transition: border-color .14s, box-shadow .14s;
+}
+.role-select:hover { border-color: #b7c4d4; }
+.role-select:focus { border-color: #2f6fb0; box-shadow: 0 0 0 3px rgba(47, 111, 176, 0.12); }
+.role-select.is-org-admin {
+  border-color: #cce0f5;
+  background: #f2f7fd;
+  color: #245c96;
+}
+.role-select.is-org-reviewer {
+  border-color: #dfd3f6;
+  background: #f6f2fd;
+  color: #623da6;
+}
+.role-select.is-org-user {
+  border-color: #e2e6ec;
+  background: #f8f9fb;
+  color: #424b57;
+}
+
+.member-role-badge {
+  display: inline-flex;
+  align-items: center;
+  height: 26px;
+  padding: 0 10px;
+  border-radius: 999px;
+  font-size: 11.5px;
+  font-weight: 600;
+}
+.member-role-badge.is-org-admin { background: #edf5fc; color: #245c96; border: 1px solid #d7e7f6; }
+.member-role-badge.is-org-reviewer { background: #f3eefc; color: #623da6; border: 1px solid #dfd3f6; }
+.member-role-badge.is-org-user { background: #f2f4f7; color: #4a5561; border: 1px solid #e4e7ec; }
+
+.invite-status.joined {
+  display: inline-flex;
+  align-items: center;
+  padding: 3px 9px;
+  border-radius: 999px;
+  background: #eaf6ef;
+  color: #2e8a5c;
+  font-size: 11px;
+  font-weight: 600;
+}
+.invite-status.pending {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  padding: 3px 9px;
+  border-radius: 999px;
+  background: #fdf1e3;
+  color: #b56314;
+  font-size: 11px;
+  font-weight: 600;
+}
+.invite-actions {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+}
+.invite-actions button {
+  height: 28px;
+  padding: 0 9px;
+  border: 1px solid #dce1e8;
+  border-radius: 6px;
+  background: #fff;
+  color: #3d4754;
+  font: 500 11.5px var(--font-sans);
+  cursor: pointer;
+}
+.invite-actions button:hover { background: #f4f6f9; }
+.invite-actions button.danger { color: #b8423b; border-color: #ebd0cd; }
+.invite-actions button.danger:hover { background: #fdf3f2; }
+
+
+/* ---------- /admin/org/quota 积分分配与对账明细渲染优化 ---------- */
+.quota-toolbar {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+  margin-bottom: 14px;
+}
+.quota-toolbar-actions {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+.quota-toolbar-actions .admin-outline {
+  min-height: 33px;
+  padding: 0 12px;
+  font-size: 12px;
+}
+
+.quota-batch-bar {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 10px;
+  padding: 10px 14px;
+  margin-bottom: 12px;
+  border-color: #cde0f3;
+  background: #f5f9fe;
+}
+.quota-batch-bar b { font-size: 12.5px; color: #1f252d; }
+.quota-batch-bar input {
+  width: 130px;
+  height: 32px;
+  padding: 0 10px;
+  border: 1px solid #d5dde7;
+  border-radius: 7px;
+  background: #fff;
+  font: 12px var(--font-sans);
+  color: #1f252d;
+}
+.quota-batch-bar .admin-primary,
+.quota-batch-bar .admin-outline {
+  min-height: 32px;
+  padding: 0 11px;
+  font-size: 12px;
+}
+
+.quota-allocation-card {
+  padding: 0;
+  overflow-x: auto;
+}
+.quota-table-head,
+.quota-member-row {
+  display: grid;
+  /* 复选框 | 成员 | 积分使用 | 实际花费 | 可用积分 | 设置积分
+     数值列给固定宽度，剩余空间全部给前两个弹性列，表头与数据因此共用一套列宽，
+     换行时两端也对齐。min-width 要容得下所有 fixed 列 + gap + padding，
+     否则容器横向滚动，表头和数据会各自平移。 */
+  grid-template-columns: 32px minmax(200px, 1.6fr) minmax(150px, 1.1fr) 96px 108px 152px;
+  align-items: center;
+  gap: 14px;
+  min-width: 890px;
+  box-sizing: border-box;
+  padding: 12px 18px;
+}
+.quota-table-head {
+  color: #7d8693;
+  background: #fbfaf5;
+  font-size: 11px;
+  font-weight: 600;
+  border-bottom: 1px solid #eee9dc;
+}
+/* 数值类列表头与数据居中对齐：列宽固定，靠左会因为内容长度不同而看上去不齐。
+   复选框列（首列）与成员列保持左对齐。 */
+.quota-table-head > span:nth-child(n+3) {
+  text-align: center;
+}
+.quota-member-row > .quota-cost {
+  text-align: center;
+}
+.quota-member-row {
+  min-height: 68px;
+  border-top: 1px solid #f0ecdf;
+  color: #4a5561;
+  font-size: 12.5px;
+  transition: background .12s;
+}
+.quota-member-row:first-of-type { border-top: 0; }
+.quota-member-row:hover { background: #fafbfd; }
+
+/* 成员列：头像 + 邮箱 + 角色徽章 */
+.quota-member-row .member-info {
+  min-width: 0;
+  display: flex;
+  align-items: center;
+  gap: 11px;
+}
+.quota-member-row .member-avatar {
+  flex: 0 0 auto;
+  display: grid;
+  place-items: center;
+  width: 34px;
+  height: 34px;
+  border-radius: 10px;
+  font-size: 14px;
+  font-weight: 700;
+  color: #245c96;
+  background: linear-gradient(140deg, #edf5fc, #e3edf8);
+}
+.quota-member-row .member-avatar.is-org-admin { color: #245c96; background: linear-gradient(140deg, #edf5fc, #d7e7f6); }
+.quota-member-row .member-avatar.is-org-reviewer { color: #623da6; background: linear-gradient(140deg, #f3eefc, #dfd3f6); }
+.quota-member-row .member-avatar.is-org-user { color: #4a5561; background: linear-gradient(140deg, #f2f4f7, #e4e7ec); }
+.quota-member-row .member-meta {
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 4px;
+}
+.quota-member-row .member-meta b {
+  max-width: 100%;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  color: #1f252d;
+  font-size: 12.5px;
+  font-weight: 600;
+}
+
+/* 积分使用：已用 + 进度条 */
+.quota-usage-cell {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  min-width: 0;
+}
+.quota-usage-nums {
+  display: flex;
+  align-items: baseline;
+  gap: 5px;
+  font-variant-numeric: tabular-nums;
+}
+.quota-usage-nums b {
+  color: #1f252d;
+  font-size: 13px;
+  font-weight: 700;
+}
+.quota-usage-total {
+  color: #939ba4;
+  font-size: 11px;
+}
+.quota-usage-bar {
+  display: block;
+  height: 5px;
+  width: 100%;
+  max-width: 150px;
+  border-radius: 999px;
+  background: #eef0f3;
+  overflow: hidden;
+}
+.quota-usage-fill {
+  display: block;
+  height: 100%;
+  border-radius: 999px;
+  background: linear-gradient(90deg, #6a9ac9, #315b6c);
+  transition: width .3s ease;
+}
+
+.quota-cost { color: #6c7480; font-variant-numeric: tabular-nums; }
+
+/* 可用积分：颜色分级徽章 */
+.quota-available {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  min-width: 56px;
+  padding: 4px 12px;
+  border-radius: 999px;
+  font-size: 12.5px;
+  font-weight: 700;
+  font-variant-numeric: tabular-nums;
+}
+.quota-available.is-ok { color: #2e8a5c; background: #eaf6ef; }
+.quota-available.is-low { color: #b56314; background: #fdf1e3; }
+.quota-available.is-empty { color: #b4443e; background: #fdeeee; }
+
+/* 设置积分：每行一个「分配」按钮，点开对话框输入额度 */
+.quota-edit {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 6px;
+}
+.quota-btn.assign {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  height: 32px;
+  padding: 0 14px;
+  color: #315b6c;
+  border: 1px solid #cfdbe1;
+  border-radius: 8px;
+  background: #fff;
+  font: 600 12px var(--font-sans);
+  white-space: nowrap;
+  cursor: pointer;
+  transition: background .12s, border-color .12s, color .12s;
+}
+.quota-btn.assign:hover {
+  color: #fff;
+  border-color: #315b6c;
+  background: #315b6c;
+}
+/* 对话框内部的提示文字 */
+.quota-alloc-hint {
+  margin-top: 12px !important;
+  color: #89929b;
+  font-size: 11px;
+  line-height: 1.6;
+}
+
+.quota-usage-card { padding: 0; overflow-x: auto; }
+.quota-usage-table { min-width: 720px; }
+.quota-usage-head,
+.quota-usage-row {
+  display: grid;
+  grid-template-columns: minmax(180px, 1.5fr) 90px 76px 96px 96px 150px;
+  align-items: center;
+  gap: 10px;
+  padding: 12px 18px;
+}
+.quota-usage-head {
+  color: #7d8693;
+  background: #fbfaf5;
+  font-size: 11px;
+  font-weight: 600;
+  border-bottom: 1px solid #eee9dc;
+}
+.quota-usage-row {
+  min-height: 52px;
+  border-top: 1px solid #f0ecdf;
+  color: #4a5561;
+  font-size: 12.5px;
+}
+.quota-usage-email {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  color: #1f252d;
+  font-weight: 500;
+}
+.quota-usage-time { color: #7d8693; font-size: 11.5px; white-space: nowrap; }
+.quota-status-pill {
+  display: inline-flex;
+  align-items: center;
+  padding: 2px 8px;
+  border-radius: 999px;
+  font-style: normal;
+  font-size: 11px;
+  font-weight: 600;
+}
+.quota-status-pill.is-settled { background: #eaf6ef; color: #2e8a5c; }
+.quota-status-pill.is-reserved { background: #fdf1e3; color: #b56314; }
+.quota-status-pill.is-released { background: #f2f4f7; color: #6c7480; }
+
+
+/* ---------- /admin/org/projects 创建人与筛选栏 ---------- */
+.project-list-card { padding: 0; overflow: hidden; }
+.project-list-card .project-list { padding: 0 18px; }
+.project-toolbar { flex-wrap: wrap; gap: 10px 12px; }
+.project-meta-line {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 6px 10px;
+  margin-top: 4px;
+}
+.project-creator-chip {
+  display: inline-flex;
+  align-items: center;
+  padding: 1px 7px;
+  border-radius: 5px;
+  background: #f2f4f7;
+  color: #3d4754;
+  font-size: 11px;
+  font-weight: 500;
 }

@@ -1,6 +1,7 @@
 import { useState } from 'react';
-import { ArrowRight, Clapperboard, LockKeyhole, Mail, Sparkles } from 'lucide-react';
+import { Eye, EyeOff, LockKeyhole, Mail, Sparkles } from 'lucide-react';
 import { api, setToken } from '../api.js';
+import imgRainAlley from '../assets/assets/scene-rain-alley-new.webp';
 import './AuthPage.css';
 
 export default function AuthPage({ onAuthenticated }) {
@@ -9,11 +10,17 @@ export default function AuthPage({ onAuthenticated }) {
   const [email, setEmail] = useState('');
   const [password, setPassword] = useState('');
   const [orgName, setOrgName] = useState('');
+  const [showPwd, setShowPwd] = useState(false);
+  const [agreed, setAgreed] = useState(true);
   const [error, setError] = useState('');
   const [busy, setBusy] = useState(false);
 
   const submit = async event => {
     event.preventDefault();
+    if (!agreed) {
+      setError('请先阅读并同意用户服务协议与隐私政策');
+      return;
+    }
     setBusy(true);
     setError('');
     try {
@@ -29,29 +36,130 @@ export default function AuthPage({ onAuthenticated }) {
     }
   };
 
-  return <main className="auth-page">
-    <div className="auth-art" aria-hidden="true">
-      <div className="auth-orbit orbit-one" /><div className="auth-orbit orbit-two" /><div className="auth-art-glow" />
-      <div className="auth-film-card"><Clapperboard size={28} /><span>STORY</span><i /><i /><i /></div>
-    </div>
-    <section className="auth-card">
-      <div className="auth-brand"><span><Sparkles size={18} /></span><div><b>AI绘梦</b><small>短剧 · 漫剧创作平台</small></div></div>
-      <p className="auth-eyebrow">你的团队创作空间</p>
-      <h1>{inviteToken ? '加入组织' : registering ? '创建你的工作空间' : '欢迎回来'}</h1>
-      <p className="auth-intro">{inviteToken ? '设置账号密码，接受组织邀请。' : registering ? '注册账号并创建第一个组织，邀请团队一起创作。' : '登录后继续你的短剧创作。'}</p>
-      {!inviteToken && <div className="auth-tabs" role="tablist" aria-label="账号操作">
-        <button type="button" role="tab" aria-selected={!registering} className={!registering ? 'active' : ''} onClick={() => { setRegistering(false); setError(''); }}>登录</button>
-        <button type="button" role="tab" aria-selected={registering} className={registering ? 'active' : ''} onClick={() => { setRegistering(true); setError(''); }}>注册</button>
-      </div>}
-      <form onSubmit={submit}>
-        {registering && !inviteToken && <label className="auth-field"><span>组织名称</span><input value={orgName} onChange={event => setOrgName(event.target.value)} placeholder="例如：星河短剧工作室" maxLength={80} required /><small>你将自动成为该组织的管理员</small></label>}
-        <label className="auth-field"><span>邮箱</span><div className="auth-input"><Mail size={17} /><input type="email" autoComplete="email" value={email} onChange={event => setEmail(event.target.value)} placeholder="name@company.com" required /></div></label>
-        <label className="auth-field"><span>密码</span><div className="auth-input"><LockKeyhole size={17} /><input type="password" autoComplete={registering ? 'new-password' : 'current-password'} value={password} onChange={event => setPassword(event.target.value)} placeholder={registering ? '至少 10 位' : '输入密码'} minLength={registering ? 10 : undefined} maxLength={128} required /></div></label>
-        {error && <p className="auth-error" role="alert">{error}</p>}
-        <button className="auth-submit" type="submit" disabled={busy}>{busy ? '请稍候…' : inviteToken ? '接受邀请并加入' : registering ? '创建组织并继续' : '登录工作台'}<ArrowRight size={17} /></button>
-      </form>
-      <p className="auth-footnote">{inviteToken ? '邀请链接仅限指定邮箱使用，有效期 7 天。' : registering ? '一个账号先加入一个组织。' : '首次使用？切换到注册，创建你的组织。'}</p>
-    </section>
-    <div className="auth-caption"><span>AI SHORT DRAMA STUDIO</span><i />从故事到成片，让每个环节都在同一个工作空间里。</div>
-  </main>;
+  const canSubmit = Boolean(email.trim() && password && (!registering || inviteToken || orgName.trim()) && agreed);
+
+  return (
+    <main className="auth-stage">
+      {/* 暗色模糊工作台背景氛围层 */}
+      <div className="auth-backdrop" aria-hidden="true">
+        <div className="auth-top-banner">
+          <span className="auth-banner-badge">新版本</span>
+          <span>AI绘梦 2.0 上新 · 剧本拆解、资产画布、审核台与抖音运营全链路上线 ›</span>
+        </div>
+        <div className="auth-bg-glow one" />
+        <div className="auth-bg-glow two" />
+      </div>
+
+      {/* 居中分栏登录弹窗 */}
+      <section className="auth-modal-card" aria-label="账号登录">
+        <div className="auth-showcase">
+          <video
+            src="/login-cover.mp4"
+            poster={imgRainAlley}
+            autoPlay
+            loop
+            muted
+            playsInline
+            className="auth-showcase-img"
+          />
+          <div className="auth-showcase-scrim" />
+
+          <div className="auth-showcase-content">
+            <h2>AI绘梦 · 剧本到成片全链路</h2>
+            <p>对剧本拆解、资产绘图与分镜视频进行精细控制，让灵感快速迭代，轻松抵达理想成片效果。</p>
+          </div>
+        </div>
+
+        <div className="auth-panel">
+          <div className="auth-panel-brand">
+            <span className="auth-logo-mark"><Sparkles size={15} /></span>
+            <b>AI绘梦</b>
+          </div>
+
+          <h1>{inviteToken ? '接受邀请加入组织' : registering ? '注册 AI绘梦' : '欢迎登录 AI绘梦'}</h1>
+
+          <form className="auth-form" onSubmit={submit}>
+            {registering && !inviteToken && (
+              <div className="auth-dark-field">
+                <input
+                  value={orgName}
+                  onChange={e => setOrgName(e.target.value)}
+                  placeholder="请输入组织名称（如：星河短剧工作室）"
+                  maxLength={80}
+                  required
+                />
+              </div>
+            )}
+
+            <div className="auth-dark-field">
+              <Mail size={15} className="auth-field-icon" />
+              <input
+                type="email"
+                autoComplete="email"
+                value={email}
+                onChange={e => setEmail(e.target.value)}
+                placeholder="请输入邮箱"
+                required
+              />
+            </div>
+
+            <div className="auth-dark-field">
+              <LockKeyhole size={15} className="auth-field-icon" />
+              <input
+                type={showPwd ? 'text' : 'password'}
+                autoComplete={registering ? 'new-password' : 'current-password'}
+                value={password}
+                onChange={e => setPassword(e.target.value)}
+                placeholder={registering ? '请设置密码（至少 10 位）' : '请输入密码'}
+                minLength={registering ? 10 : undefined}
+                maxLength={128}
+                required
+              />
+              <button
+                type="button"
+                className="auth-pwd-toggle"
+                onClick={() => setShowPwd(v => !v)}
+                aria-label={showPwd ? '隐藏密码' : '显示密码'}
+              >
+                {showPwd ? <EyeOff size={15} /> : <Eye size={15} />}
+              </button>
+            </div>
+
+            {error && <p className="auth-dark-error" role="alert">{error}</p>}
+
+            <button className="auth-dark-submit" type="submit" disabled={busy || !canSubmit}>
+              {busy ? '请稍候…' : inviteToken ? '接受邀请并登录' : registering ? '注册并创建组织' : '登录'}
+            </button>
+          </form>
+
+          {!inviteToken && (
+            <>
+              <div className="auth-divider"><span>其他方式</span></div>
+              <div className="auth-mode-switch">
+                <button
+                  type="button"
+                  className={!registering ? 'is-active' : ''}
+                  onClick={() => { setRegistering(false); setError(''); }}
+                >
+                  邮箱密码登录
+                </button>
+                <button
+                  type="button"
+                  className={registering ? 'is-active' : ''}
+                  onClick={() => { setRegistering(true); setError(''); }}
+                >
+                  创建新组织
+                </button>
+              </div>
+            </>
+          )}
+
+          <label className="auth-agree">
+            <input type="checkbox" checked={agreed} onChange={e => setAgreed(e.target.checked)} />
+            <span>已阅读并同意 <em>用户服务协议</em>、<em>隐私政策</em>、<em>AI功能使用须知</em></span>
+          </label>
+        </div>
+      </section>
+    </main>
+  );
 }

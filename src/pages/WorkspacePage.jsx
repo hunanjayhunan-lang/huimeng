@@ -761,6 +761,11 @@ export default function WorkspacePage({ role, projectId: externalProjectId } = {
   const [sketchStep, setSketchStep] = useState(99); // 0: 根节点, 1: 分组框, 2+: 逐个资产卡片
   const [selectedId, setSelectedId] = useState('');
   const [editPrompt, setEditPrompt] = useState('');
+  const [assetEditorOpen, setAssetEditorOpen] = useState(false);
+  const [editingAssetId, setEditingAssetId] = useState(null); // null=新增；否则编辑该资产
+  const [assetForm, setAssetForm] = useState({ name: '', group: 'character', sub: '', img: '', prompt: '' });
+  const [ctxMenu, setCtxMenu] = useState(null); // { x, y } 右键菜单位置，null=关闭
+  const [assetVersion, setAssetVersion] = useState(0); // 资产增删改后自增，驱动画布/计数重算
   const [leftOpen, setLeftOpen] = useState(true);
   const [rightOpen, setRightOpen] = useState(true);
   const [harnessOpen, setHarnessOpen] = useState(false);
@@ -934,6 +939,19 @@ export default function WorkspacePage({ role, projectId: externalProjectId } = {
     window.addEventListener('keydown', onKey);
     return () => window.removeEventListener('keydown', onKey);
   }, [previewImg, scriptModalOpen]);
+
+  // 右键菜单：点击任意处关闭 + Esc 关闭
+  useEffect(() => {
+    if (!ctxMenu) return undefined;
+    const onDown = () => setCtxMenu(null);
+    const onKey = e => { if (e.key === 'Escape') setCtxMenu(null); };
+    window.addEventListener('mousedown', onDown);
+    window.addEventListener('keydown', onKey);
+    return () => {
+      window.removeEventListener('mousedown', onDown);
+      window.removeEventListener('keydown', onKey);
+    };
+  }, [ctxMenu]);
 
   useEffect(() => {
     threadEndRef.current?.scrollIntoView({ behavior: 'smooth', block: 'end' });
@@ -1177,6 +1195,62 @@ export default function WorkspacePage({ role, projectId: externalProjectId } = {
     });
   };
 
+  // 持久化资产清单到项目文档（增删改后调用）
+  const persistAssets = async nextAssets => {
+    setAssetNodes(nextAssets);
+    setAssetVersion(v => v + 1);
+    if (activeProjectId) {
+      api.patch('projects', activeProjectId, { assets: nextAssets }).catch(() => {});
+    }
+  };
+
+  const openAssetEditor = (asset = null, presetGroup = null) => {
+    if (asset) {
+      setEditingAssetId(asset.id);
+      setAssetForm({ name: asset.name || '', group: asset.group || 'character', sub: asset.sub || '', img: asset.img || '', prompt: asset.prompt || '' });
+    } else {
+      setEditingAssetId(null);
+      setAssetForm({ name: '', group: presetGroup || 'character', sub: '', img: '', prompt: '' });
+    }
+    setAssetEditorOpen(true);
+  };
+
+  const saveAsset = () => {
+    const name = assetForm.name.trim();
+    if (!name) { showToast('请填写资产名称'); return; }
+    const group = ['character', 'prop', 'place'].includes(assetForm.group) ? assetForm.group : 'character';
+    if (editingAssetId) {
+      const next = ASSET_NODES.map(a => a.id === editingAssetId
+        ? { ...a, name, group, sub: assetForm.sub?.trim() || '', img: assetForm.img?.trim() || a.img, prompt: assetForm.prompt?.trim() || '' }
+        : a);
+      persistAssets(next);
+      showToast(`已更新资产「${name}」`);
+    } else {
+      // 新增：id 用 a-<group>-<时间戳>，group 用首字母
+      const gPrefix = group === 'character' ? 'c' : group === 'prop' ? 'p' : 'e';
+      const newAsset = {
+        id: `a-${gPrefix}${Date.now().toString(36)}`,
+        group, name, sub: assetForm.sub?.trim() || (group === 'character' ? '人物三视图' : group === 'prop' ? '道具图' : '场景底板'),
+        img: assetForm.img?.trim() || '',
+        prompt: assetForm.prompt?.trim() || '',
+      };
+      persistAssets([...ASSET_NODES, newAsset]);
+      showToast(`已新增资产「${name}」`);
+    }
+    setAssetEditorOpen(false);
+    setEditingAssetId(null);
+  };
+
+  const deleteAsset = id => {
+    const target = ASSET_NODES.find(a => a.id === id);
+    if (!target) return;
+    if (!window.confirm(`确定删除资产「${target.name}」？此操作不可撤销。`)) return;
+    const next = ASSET_NODES.filter(a => a.id !== id);
+    persistAssets(next);
+    if (selectedId === id) { setSelectedId(''); setEditPrompt(''); }
+    showToast(`已删除资产「${target.name}」`);
+  };
+
   const counts = useMemo(() => {
     const c = { character: [0, 0], prop: [0, 0], place: [0, 0] };
     ASSET_NODES.forEach(n => {
@@ -1184,7 +1258,8 @@ export default function WorkspacePage({ role, projectId: externalProjectId } = {
       if (assets[n.id]?.status === 'pass') c[n.group][0] += 1;
     });
     return c;
-  }, [assets]);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [assets, assetVersion]);
   const allPass = ASSET_NODES.every(n => assets[n.id]?.status === 'pass');
   const anyBusy = ASSET_NODES.some(n => ['generating', 'retrying', 'checking', 'queued'].includes(assets[n.id]?.status));
 
@@ -1594,7 +1669,8 @@ export default function WorkspacePage({ role, projectId: externalProjectId } = {
       });
     });
     return { nodes, edges };
-  }, [assets, counts, lockedStyle, selectedId, scriptTitle, scriptMeta, sketchStep]);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [assets, counts, lockedStyle, selectedId, scriptTitle, scriptMeta, sketchStep, assetVersion]);
 
   /* ---------- 状态派生 ---------- */
   const sessionStatus = stage >= 2 ? ['review', '审核中']
@@ -1961,6 +2037,14 @@ export default function WorkspacePage({ role, projectId: externalProjectId } = {
       <div className="ws-node-title">
         <span className="wsn-dot" style={{ background: GROUP_META[selectedAsset.group].color }} />
         <b>{selectedAsset.name}</b><small>{selectedAsset.sub}</small>
+        <div className="ws-node-actions">
+          <button type="button" className="ws-btn icon" title="编辑资产" onClick={() => openAssetEditor(selectedAsset)}>
+            <PenTool size={13} />
+          </button>
+          <button type="button" className="ws-btn icon danger" title="删除资产" onClick={() => deleteAsset(selectedAsset.id)}>
+            <X size={13} />
+          </button>
+        </div>
       </div>
       <section className="ws-bd-section">
         <div className="ws-bd-title">Loop 记录</div>
@@ -2471,6 +2555,9 @@ export default function WorkspacePage({ role, projectId: externalProjectId } = {
                     </span>
                   ))}
                 </div>
+                <button type="button" className="ws-btn" onClick={() => openAssetEditor()} title="手动新增一个资产">
+                  <Plus size={13} /> 新增资产
+                </button>
                 <button type="button" className="ws-btn" onClick={startAssets} title="重播 0→1 执笔绘制动画">
                   <PenTool size={13} /> 重绘 0→1
                 </button>
@@ -2478,7 +2565,11 @@ export default function WorkspacePage({ role, projectId: externalProjectId } = {
                   {allPass ? <>提交审核 <ArrowRight size={13} /></> : <><Loader2 size={13} className="spin" /> 资产生成中</>}
                 </button>
               </div>
-              <div className="ws-flow" ref={flowRef}>
+              <div className="ws-flow" ref={flowRef} onContextMenu={event => {
+                event.preventDefault();
+                event.stopPropagation();
+                setCtxMenu({ x: event.clientX, y: event.clientY });
+              }}>
                 {sketchStep < 11 && (
                   <div className="ws-canvas-pen-banner" aria-hidden="true">
                     <PenTool size={13} /> Agent 正在从 0 勾勒画布框架…
@@ -2771,6 +2862,124 @@ export default function WorkspacePage({ role, projectId: externalProjectId } = {
             </div>
             <div className="ws-lightbox-body">
               <img src={previewImg.src} alt={previewImg.name} className={previewImg.filterClass} />
+            </div>
+          </div>
+        </div>
+      )}
+
+      {ctxMenu && (
+        <div className="ws-ctx-menu" style={{ left: ctxMenu.x, top: ctxMenu.y }} role="menu" onMouseDown={e => e.stopPropagation()} onClick={e => e.stopPropagation()}>
+          <div className="ws-ctx-menu-title">新增资产</div>
+          <button type="button" className="ws-ctx-item" onClick={() => { setCtxMenu(null); openAssetEditor(null, 'character'); }}>
+            <span className="wsn-dot" style={{ background: GROUP_META.character.color }} /> 人物
+          </button>
+          <button type="button" className="ws-ctx-item" onClick={() => { setCtxMenu(null); openAssetEditor(null, 'prop'); }}>
+            <span className="wsn-dot" style={{ background: GROUP_META.prop.color }} /> 道具
+          </button>
+          <button type="button" className="ws-ctx-item" onClick={() => { setCtxMenu(null); openAssetEditor(null, 'place'); }}>
+            <span className="wsn-dot" style={{ background: GROUP_META.place.color }} /> 场景
+          </button>
+        </div>
+      )}
+
+      {assetEditorOpen && (
+        <div className="ws-lightbox" role="dialog" aria-modal="true" onClick={() => { setAssetEditorOpen(false); setEditingAssetId(null); }}>
+          <div className="ws-hub-modal" onClick={e => e.stopPropagation()}>
+            <div className="ws-hub-modal-head">
+              <div>
+                <b>{editingAssetId ? '编辑资产' : '新增资产'}</b>
+                <small>{editingAssetId ? '修改资产的名称、类型、图片与提示词' : '手动往画布添加一个人物 / 道具 / 场景资产'}</small>
+              </div>
+              <button type="button" className="ws-btn icon" onClick={() => { setAssetEditorOpen(false); setEditingAssetId(null); }} aria-label="关闭">
+                <X size={15} />
+              </button>
+            </div>
+            <div className="ws-hub-modal-body">
+              <div className="ws-hub-field">
+                <label htmlFor="asset-name">名称 <em>*</em></label>
+                <input
+                  id="asset-name"
+                  value={assetForm.name}
+                  onChange={e => setAssetForm(f => ({ ...f, name: e.target.value }))}
+                  placeholder="例如：咕咕嘎嘎 / 甜筒 / KFC 餐厅内"
+                  autoFocus
+                />
+              </div>
+              <div className="ws-hub-field">
+                <label>类型 <em>*</em></label>
+                <div className="ws-asset-group-opts">
+                  {['character', 'prop', 'place'].map(g => (
+                    <button
+                      key={g}
+                      type="button"
+                      className={`ws-asset-group-opt ${assetForm.group === g ? 'active' : ''}`}
+                      onClick={() => setAssetForm(f => ({ ...f, group: g }))}
+                    >
+                      <span className="wsn-dot" style={{ background: GROUP_META[g].color }} />
+                      {GROUP_META[g].label}
+                    </button>
+                  ))}
+                </div>
+              </div>
+              <div className="ws-hub-field">
+                <label htmlFor="asset-sub">子标题</label>
+                <input
+                  id="asset-sub"
+                  value={assetForm.sub}
+                  onChange={e => setAssetForm(f => ({ ...f, sub: e.target.value }))}
+                  placeholder="例如：人物三视图 / 道具图 / 场景底板"
+                />
+              </div>
+              <div className="ws-hub-field">
+                <label htmlFor="asset-img">图片</label>
+                <div className="ws-asset-img-row">
+                  <input
+                    id="asset-img"
+                    value={assetForm.img}
+                    onChange={e => setAssetForm(f => ({ ...f, img: e.target.value }))}
+                    placeholder="图片地址，或点右侧上传"
+                  />
+                  <label className="ws-btn">
+                    <Upload size={13} /> 上传
+                    <input
+                      type="file"
+                      accept="image/*"
+                      hidden
+                      onChange={async e => {
+                        const file = e.target.files?.[0];
+                        e.target.value = '';
+                        if (!file) return;
+                        try {
+                          setAssetForm(f => ({ ...f, img: '' }));
+                          const result = await api.distributeUpload(file);
+                          const url = result.videoUrl || result.url || '';
+                          if (url) setAssetForm(f => ({ ...f, img: url }));
+                          showToast('图片上传成功');
+                        } catch (err) {
+                          showToast(`上传失败：${err.message || '未知错误'}`);
+                        }
+                      }}
+                    />
+                  </label>
+                </div>
+                {assetForm.img && <img src={assetForm.img} alt="预览" className="ws-asset-img-preview" onError={e => { e.currentTarget.style.display = 'none'; }} />}
+              </div>
+              <div className="ws-hub-field">
+                <label htmlFor="asset-prompt">提示词</label>
+                <textarea
+                  id="asset-prompt"
+                  rows={3}
+                  value={assetForm.prompt}
+                  onChange={e => setAssetForm(f => ({ ...f, prompt: e.target.value }))}
+                  placeholder="描述该资产的画面 / 三视图 / 风格…"
+                />
+              </div>
+              <div className="ws-gate-actions" style={{ marginTop: 14 }}>
+                <button type="button" className="ws-btn" onClick={() => { setAssetEditorOpen(false); setEditingAssetId(null); }}>取消</button>
+                <button type="button" className="ws-btn primary" onClick={saveAsset}>
+                  <Check size={13} /> {editingAssetId ? '保存修改' : '添加资产'}
+                </button>
+              </div>
             </div>
           </div>
         </div>

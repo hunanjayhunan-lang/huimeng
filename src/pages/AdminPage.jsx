@@ -313,36 +313,66 @@ function Members({ onToast, onChanged }) {
     catch (err) { onToast(err.message); }
   };
 
+  const roleCounts = useMemo(() => ({
+    all: members.length,
+    'org.admin': members.filter(m => m.role === 'org.admin').length,
+    'org.reviewer': members.filter(m => m.role === 'org.reviewer').length,
+    'org.user': members.filter(m => m.role === 'org.user').length,
+  }), [members]);
+
   return (
     <>
-      <PanelHeading title="成员管理" description="邀请成员加入组织，并管理成员角色">
+      <PanelHeading title="成员管理" description="邀请成员加入组织，并管理成员角色与权限">
         <button type="button" className="admin-primary" onClick={() => { setInviteUrl(''); setInviteOpen(true); }}><Plus size={17} />邀请成员</button>
       </PanelHeading>
 
       <div className="admin-card member-table-card">
         <div className="admin-toolbar">
           <label className="admin-search"><Search size={17} /><input value={query} onChange={event => setQuery(event.target.value)} placeholder="搜索邮箱" /></label>
-          <select value={role} onChange={event => setRole(event.target.value)} aria-label="筛选成员角色">
-            <option>全部角色</option><option>组织管理员</option><option>审核员</option><option>组织成员</option>
-          </select>
+          <div className="role-filter-pills" role="tablist" aria-label="按角色筛选">
+            {[
+              ['全部角色', `全部 (${roleCounts.all})`],
+              ['组织管理员', `管理员 (${roleCounts['org.admin']})`],
+              ['审核员', `审核员 (${roleCounts['org.reviewer']})`],
+              ['组织成员', `成员 (${roleCounts['org.user']})`],
+            ].map(([key, label]) => (
+              <button
+                key={key}
+                type="button"
+                className={role === key ? 'is-active' : ''}
+                onClick={() => setRole(key)}
+              >
+                {label}
+              </button>
+            ))}
+          </div>
           <span className="table-total">{loading ? '正在加载…' : `共 ${filtered.length} 位成员 · ${filteredInvites.length} 个待接受邀请`}</span>
         </div>
 
         <div className="admin-table">
-          <div className="table-head"><span>成员 / 邀请</span><span>角色</span><span>状态</span><span>操作</span></div>
+          <div className="table-head"><span>成员 / 邀请</span><span>角色</span><span>状态</span><span className="table-head-actions">操作</span></div>
           {filtered.map((member, index) => (
             <div className="table-row" key={member.id}>
               <div className="member-row">
                 <span className={`member-avatar ${avatarColors[index % avatarColors.length]}`}>{member.email.slice(0, 1).toUpperCase()}</span>
                 <div className="member-info"><b>{member.email}</b><small>加入于 {new Date(member.createdAt).toLocaleDateString('zh-CN')}</small></div>
               </div>
-              <select aria-label={`${member.email}的角色`} value={member.role} onChange={event => changeRole(member, event.target.value)}>
-                <option value="org.admin">组织管理员</option>
-                <option value="org.reviewer">审核员</option>
-                <option value="org.user">组织成员</option>
-              </select>
-              <span className="invite-status">已加入</span>
-              <button type="button" className="icon-action" aria-label={`移除 ${member.email}`} onClick={() => removeMember(member)}><X size={17} /></button>
+              <div className="member-role-cell">
+                <select
+                  className={`role-select is-${member.role.replace('.', '-')}`}
+                  aria-label={`${member.email}的角色`}
+                  value={member.role}
+                  onChange={event => changeRole(member, event.target.value)}
+                >
+                  <option value="org.admin">组织管理员</option>
+                  <option value="org.reviewer">审核员</option>
+                  <option value="org.user">组织成员</option>
+                </select>
+              </div>
+              <div><span className="invite-status joined">已加入</span></div>
+              <div className="table-row-actions">
+                <button type="button" className="icon-action" title={`移除 ${member.email}`} aria-label={`移除 ${member.email}`} onClick={() => removeMember(member)}><X size={16} /></button>
+              </div>
             </div>
           ))}
           {filteredInvites.map(item => (
@@ -351,12 +381,16 @@ function Members({ onToast, onChanged }) {
                 <span className="member-avatar gold">{item.email.slice(0, 1).toUpperCase()}</span>
                 <div className="member-info"><b>{item.email}</b><small>有效至 {new Date(item.expiresAt).toLocaleDateString('zh-CN')}</small></div>
               </div>
-              <span className="member-role">{ROLE_NAME[item.role]}</span>
-              <span className="invite-status pending"><Mail size={13} />邀请中</span>
-              <span className="invite-actions">
-                <button type="button" onClick={() => resendInvite(item)}>重发</button>
-                <button type="button" onClick={() => revokeInvite(item)}>撤回</button>
-              </span>
+              <div className="member-role-cell">
+                <span className={`member-role-badge is-${item.role.replace('.', '-')}`}>{ROLE_NAME[item.role]}</span>
+              </div>
+              <div><span className="invite-status pending"><Mail size={12} />邀请中</span></div>
+              <div className="table-row-actions">
+                <span className="invite-actions">
+                  <button type="button" onClick={() => resendInvite(item)}>重发</button>
+                  <button type="button" className="danger" onClick={() => revokeInvite(item)}>撤回</button>
+                </span>
+              </div>
             </div>
           ))}
           {!loading && !filtered.length && !filteredInvites.length && (
@@ -399,12 +433,14 @@ function Members({ onToast, onChanged }) {
 
 function Quota({ onToast }) {
   const [quota, setQuota] = useState(null);
-  const [edits, setEdits] = useState({});
   const [selected, setSelected] = useState([]);
   const [batchAmount, setBatchAmount] = useState('');
   const [usage, setUsage] = useState(null);
   const [usagePage, setUsagePage] = useState(1);
   const [tab, setTab] = useState('allocate');
+  // 分配额度对话框：每行只有一个按钮，点开后输入并确认，不再在行内直接编辑。
+  const [allocTarget, setAllocTarget] = useState(null);
+  const [allocAmount, setAllocAmount] = useState('');
 
   const refresh = useCallback(async () => {
     try { setQuota(await api.orgQuota()); } catch (err) { onToast(err.message); }
@@ -419,19 +455,34 @@ function Quota({ onToast }) {
 
   useEffect(() => { if (tab === 'usage') loadUsage(usagePage); }, [tab, usagePage, loadUsage]);
 
-  const save = async member => {
-    const amount = Number(edits[member.id] ?? member.allocation);
-    try {
-      setQuota(await api.setMemberQuota(member.id, amount));
-      onToast(`${member.email} 的额度已更新`);
-      setEdits(current => { const next = { ...current }; delete next[member.id]; return next; });
-    } catch (err) { onToast(err.message); }
+  // 打开分配对话框：预填当前额度，方便在原值上调整。
+  const openAllocate = member => {
+    setAllocTarget(member);
+    setAllocAmount(String(member.allocation ?? 0));
   };
 
-  const clearOne = async member => {
+  const closeAllocate = () => {
+    setAllocTarget(null);
+    setAllocAmount('');
+  };
+
+  // 确认分配：校验后写入，成功后关闭对话框。
+  const confirmAllocate = async () => {
+    if (!allocTarget) return;
+    const amount = Number(allocAmount);
+    if (!Number.isInteger(amount) || amount < 0) {
+      onToast('请输入 0 或正整数积分');
+      return;
+    }
+    const floor = Number(allocTarget.used || 0) + Number(allocTarget.reserved || 0);
+    if (amount < floor) {
+      onToast(`不能低于已用预占的 ${count(floor)} 积分`);
+      return;
+    }
     try {
-      setQuota(await api.clearMemberQuota(member.id));
-      onToast(`${member.email} 的额度已清零`);
+      setQuota(await api.setMemberQuota(allocTarget.id, amount));
+      onToast(`${allocTarget.email} 的额度已设为 ${count(amount)} 积分`);
+      closeAllocate();
     } catch (err) { onToast(err.message); }
   };
 
@@ -477,11 +528,15 @@ function Quota({ onToast }) {
         </div>
       )}
 
-      <div className="org-toolbar" style={{ marginBottom: 12 }}>
-        <button type="button" className={tab === 'allocate' ? 'admin-primary' : 'admin-outline'} onClick={() => setTab('allocate')}>成员分配</button>
-        <button type="button" className={tab === 'usage' ? 'admin-primary' : 'admin-outline'} onClick={() => setTab('usage')}>对账明细</button>
-        <button type="button" className="admin-outline" onClick={revoke}>回收额度</button>
-        <button type="button" className="admin-outline" onClick={() => window.open('/api/org/quota/export', '_blank')}>导出 CSV</button>
+      <div className="quota-toolbar">
+        <div className="role-filter-pills" role="tablist">
+          <button type="button" className={tab === 'allocate' ? 'is-active' : ''} onClick={() => setTab('allocate')}>成员分配</button>
+          <button type="button" className={tab === 'usage' ? 'is-active' : ''} onClick={() => setTab('usage')}>对账明细</button>
+        </div>
+        <div className="quota-toolbar-actions">
+          <button type="button" className="admin-outline" onClick={revoke}>回收额度</button>
+          <button type="button" className="admin-outline" onClick={() => window.open('/api/org/quota/export', '_blank')}>导出 CSV</button>
+        </div>
       </div>
 
       {tab === 'allocate' ? (
@@ -494,9 +549,9 @@ function Quota({ onToast }) {
           </div>
 
           {selected.length > 0 && (
-            <div className="admin-card" style={{ padding: '10px 14px', marginBottom: 12, display: 'flex', gap: 10, alignItems: 'center' }}>
-              <b>已选 {selected.length} 人</b>
-              <input type="number" min="0" step="1" value={batchAmount} onChange={event => setBatchAmount(event.target.value)} placeholder="每人积分" style={{ width: 120 }} />
+            <div className="admin-card quota-batch-bar">
+              <b>已选 {selected.length} 位成员</b>
+              <input type="number" min="0" step="1" value={batchAmount} onChange={event => setBatchAmount(event.target.value)} placeholder="每人积分" />
               <button type="button" className="admin-primary" onClick={batchAssign}>批量分配</button>
               <button type="button" className="admin-outline" onClick={() => setSelected([])}>取消选择</button>
             </div>
@@ -505,46 +560,97 @@ function Quota({ onToast }) {
           <article className="admin-card quota-allocation-card">
             <div className="quota-table-head">
               <span><input type="checkbox" checked={!!quota?.members?.length && selected.length === quota.members.length} onChange={event => setSelected(event.target.checked ? (quota?.members || []).map(item => item.id) : [])} aria-label="全选" /></span>
-              <span>成员</span><span>已分配</span><span>已用</span><span>实际花费</span><span>预占</span><span>可用</span><span>设置积分</span>
+              <span>成员</span><span>积分使用</span><span>实际花费</span><span>可用积分</span><span>设置积分</span>
             </div>
-            {(quota?.members || []).map(member => (
-              <div className="quota-member-row" key={member.id}>
-                <span><input type="checkbox" checked={selected.includes(member.id)} onChange={() => toggle(member.id)} aria-label={`选择 ${member.email}`} /></span>
-                <span className="member-info"><b>{member.email}</b><small>{ROLE_NAME[member.role]}</small></span>
-                <span>{count(member.allocation)}</span>
-                <span>{count(member.used)}</span>
-                <span className="quota-cost">¥{Number(member.costCny || 0).toFixed(2)}</span>
-                <span>{count(member.reserved)}</span>
-                <b>{count(member.available)}</b>
-                <span className="quota-edit">
-                  <input
-                    type="number"
-                    min={member.used + member.reserved}
-                    step="1"
-                    value={edits[member.id] ?? member.allocation}
-                    onChange={event => setEdits(current => ({ ...current, [member.id]: event.target.value }))}
-                  />
-                  <button type="button" className="admin-primary" onClick={() => save(member)}>保存</button>
-                  <button type="button" className="admin-outline" onClick={() => clearOne(member)} title="清零额度">清零</button>
-                </span>
-              </div>
-            ))}
+            {(quota?.members || []).map(member => {
+              const allocated = Number(member.allocation) || 0;
+              const used = Number(member.used) || 0;
+              const reserved = Number(member.reserved) || 0;
+              const available = Number(member.available) || 0;
+              const usagePct = allocated ? Math.min(100, Math.round(((used + reserved) / allocated) * 100)) : 0;
+              const availLevel = available === 0 ? 'empty' : available <= (allocated * 0.15 || 50) ? 'low' : 'ok';
+              return (
+                <div className="quota-member-row" key={member.id}>
+                  <span><input type="checkbox" checked={selected.includes(member.id)} onChange={() => toggle(member.id)} aria-label={`选择 ${member.email}`} /></span>
+                  <span className="member-info">
+                    <span className={`member-avatar is-${(member.role || 'org.user').replace('.', '-')}`} aria-hidden="true">{member.email.charAt(0).toUpperCase()}</span>
+                    <span className="member-meta">
+                      <b>{member.email}</b>
+                      <span className={`member-role-badge is-${(member.role || 'org.user').replace('.', '-')}`}>{ROLE_NAME[member.role] || '组织成员'}</span>
+                    </span>
+                  </span>
+                  <span className="quota-usage-cell">
+                    <span className="quota-usage-nums">
+                      <b>{count(used + reserved)}</b>
+                      <span className="quota-usage-total">/ {count(allocated)}</span>
+                    </span>
+                    <span className="quota-usage-bar" role="img" aria-label={`已用 ${usagePct}%`}>
+                      <span className="quota-usage-fill" style={{ width: `${usagePct}%` }} />
+                    </span>
+                  </span>
+                  <span className="quota-cost">¥{Number(member.costCny || 0).toFixed(2)}</span>
+                  <span className={`quota-available is-${availLevel}`}>{count(available)}</span>
+                  <span className="quota-edit">
+                    <button type="button" className="quota-btn assign" onClick={() => openAllocate(member)}>
+                      <Wallet size={14} />分配
+                    </button>
+                  </span>
+                </div>
+              );
+            })}
             {!quota?.members?.length && <EmptyState title="当前组织还没有成员" description="邀请成员加入后即可分配积分。" />}
             <div className="table-foot">图片任务预占 1 积分，视频任务预占 8 积分；完成后按真实成本结算（视频随 token 波动），失败或取消自动退还。LLM 调用每 1000 tokens 计 1 积分。积分按自然月重置。</div>
           </article>
+
+          {allocTarget && (
+            <div
+              className="admin-modal-backdrop"
+              onMouseDown={event => { if (event.target === event.currentTarget) closeAllocate(); }}
+            >
+              <div className="admin-modal" role="dialog" aria-modal="true" aria-label="分配积分">
+                <button type="button" className="modal-x" onClick={closeAllocate} aria-label="关闭"><X size={18} /></button>
+                <span className="modal-icon"><Wallet size={20} /></span>
+                <h2>分配积分</h2>
+                <p>{allocTarget.email}</p>
+                <label>发送额度（积分）
+                  <input
+                    autoFocus
+                    type="number"
+                    min={Number(allocTarget.used || 0) + Number(allocTarget.reserved || 0)}
+                    step="1"
+                    value={allocAmount}
+                    onChange={event => setAllocAmount(event.target.value)}
+                    onKeyDown={event => event.key === 'Enter' && confirmAllocate()}
+                  />
+                </label>
+                <p className="quota-alloc-hint">
+                  当前额度 {count(allocTarget.allocation)} 积分，已用 {count(Number(allocTarget.used || 0) + Number(allocTarget.reserved || 0))} 积分。
+                  额度不能低于已用部分。
+                </p>
+                <div className="modal-actions">
+                  <button type="button" className="admin-outline" onClick={closeAllocate}>取消</button>
+                  <button type="button" className="admin-primary" onClick={confirmAllocate}><Check size={16} />保存确认</button>
+                </div>
+              </div>
+            </div>
+          )}
         </>
       ) : (
-        <article className="admin-card member-table-card">
-          <div className="admin-table">
-            <div className="table-head"><span>成员</span><span>期间</span><span>积分</span><span>状态</span><span>实际成本</span><span>结算时间</span></div>
+        <article className="admin-card quota-usage-card">
+          <div className="quota-usage-table">
+            <div className="quota-usage-head"><span>成员</span><span>期间</span><span>积分</span><span>状态</span><span>实际成本</span><span>结算时间</span></div>
             {(usage?.items || []).map(row => (
-              <div className="table-row" key={row.taskId}>
-                <span>{row.userEmail || '—'}</span>
+              <div className="quota-usage-row" key={row.taskId}>
+                <span className="quota-usage-email">{row.userEmail || '—'}</span>
                 <span>{row.period}</span>
                 <b>{row.amount}</b>
-                <span>{row.status === 'settled' ? '已结算' : row.status === 'reserved' ? '预占中' : '已释放'}</span>
+                <span>
+                  <em className={`quota-status-pill is-${row.status}`}>
+                    {row.status === 'settled' ? '已结算' : row.status === 'reserved' ? '预占中' : '已释放'}
+                  </em>
+                </span>
                 <span>¥{Number(row.costCny || 0).toFixed(4)}</span>
-                <span>{row.settledAt || row.createdAt ? new Date(row.settledAt || row.createdAt).toLocaleString('zh-CN') : '—'}</span>
+                <span className="quota-usage-time">{row.settledAt || row.createdAt ? new Date(row.settledAt || row.createdAt).toLocaleString('zh-CN') : '—'}</span>
               </div>
             ))}
             {!usage?.items?.length && <EmptyState title="暂无额度使用记录" description="成员生成任务后会在这里产生明细。" />}
@@ -567,6 +673,9 @@ function Quota({ onToast }) {
 function Projects({ onToast }) {
   const [projects, setProjects] = useState([]);
   const [loading, setLoading] = useState(true);
+  const [query, setQuery] = useState('');
+  const [creatorFilter, setCreatorFilter] = useState('all');
+  const [statusFilter, setStatusFilter] = useState('all');
 
   useEffect(() => {
     api.list('projects')
@@ -575,29 +684,84 @@ function Projects({ onToast }) {
       .finally(() => setLoading(false));
   }, [onToast]);
 
+  const creators = useMemo(
+    () => Array.from(new Set(projects.map(p => p.createdByEmail).filter(Boolean))).sort(),
+    [projects],
+  );
+
+  const filtered = useMemo(() => {
+    const q = query.trim().toLowerCase();
+    return projects.filter(project => {
+      const status = projectStatus(project);
+      if (statusFilter !== 'all' && status !== statusFilter) return false;
+      if (creatorFilter !== 'all' && (project.createdByEmail || '未知') !== creatorFilter) return false;
+      if (q && ![project.name, project.createdByEmail].some(v => String(v || '').toLowerCase().includes(q))) return false;
+      return true;
+    });
+  }, [projects, query, creatorFilter, statusFilter]);
+
   return (
     <>
-      <PanelHeading title="项目管理" description="管理员可查看本 Org 全部项目；普通成员只看本人项目">
-        <span className="admin-count-label">共 {projects.length} 个项目</span>
+      <PanelHeading title="项目管理" description="管理员可查看本 Org 全部项目与创建人；支持按创建人与状态筛选">
+        <span className="admin-count-label">
+          {filtered.length === projects.length ? `共 ${projects.length} 个项目` : `显示 ${filtered.length} / ${projects.length} 个项目`}
+        </span>
       </PanelHeading>
-      <div className="admin-card project-list">
-        {projects.map(project => {
-          const progress = projectProgress(project);
-          const status = projectStatus(project);
-          return (
-            <div className="project-row project-large" key={project.id}>
-              <div className="project-cover"><Video size={20} /></div>
-              <div className="project-info"><b>{project.name || '未命名项目'}</b><small>最近更新 {projectUpdated(project)}</small></div>
-              <div className="project-progress">
-                <div><span>制作进度</span><b>{progress}%</b></div>
-                <i><em style={{ width: `${progress}%` }} /></i>
+
+      <div className="admin-card project-list-card">
+        <div className="admin-toolbar project-toolbar">
+          <label className="admin-search">
+            <Search size={16} />
+            <input value={query} onChange={e => setQuery(e.target.value)} placeholder="搜索项目名称或创建人…" />
+          </label>
+          <select value={creatorFilter} onChange={e => setCreatorFilter(e.target.value)} aria-label="按创建人筛选">
+            <option value="all">全部创建人</option>
+            {creators.map(email => <option key={email} value={email}>{email}</option>)}
+          </select>
+          <div className="role-filter-pills" role="tablist" aria-label="按状态筛选">
+            {['all', '进行中', '待审核', '已完成'].map(key => (
+              <button
+                key={key}
+                type="button"
+                className={statusFilter === key ? 'is-active' : ''}
+                onClick={() => setStatusFilter(key)}
+              >
+                {key === 'all' ? '全部' : key}
+              </button>
+            ))}
+          </div>
+        </div>
+
+        <div className="project-list">
+          {filtered.map(project => {
+            const progress = projectProgress(project);
+            const status = projectStatus(project);
+            return (
+              <div className="project-row project-large" key={project.id}>
+                <div className="project-cover"><Video size={20} /></div>
+                <div className="project-info">
+                  <b>{project.name || '未命名项目'}</b>
+                  <small className="project-meta-line">
+                    <span className="project-creator-chip">创建人：{project.createdByEmail || '系统'}</span>
+                    <span>最近更新 {projectUpdated(project)}</span>
+                  </small>
+                </div>
+                <div className="project-progress">
+                  <div><span>制作进度</span><b>{progress}%</b></div>
+                  <i><em style={{ width: `${progress}%` }} /></i>
+                </div>
+                <span className={`status-pill ${status === '已完成' ? 'done' : ''}`}>{status}</span>
+                <a className="icon-action" href="/app/projects" aria-label={`打开${project.name || ''}项目`}><ArrowRight size={18} /></a>
               </div>
-              <span className={`status-pill ${status === '已完成' ? 'done' : ''}`}>{status}</span>
-              <a className="icon-action" href="/app/projects" aria-label={`打开${project.name || ''}项目`}><ArrowRight size={18} /></a>
-            </div>
-          );
-        })}
-        {!projects.length && <EmptyState title={loading ? '正在读取项目…' : '当前组织还没有项目'} description={loading ? '' : '在创作工作台新建项目后会出现在这里。'} />}
+            );
+          })}
+          {!filtered.length && (
+            <EmptyState
+              title={loading ? '正在读取项目…' : projects.length ? '没有匹配的项目' : '当前组织还没有项目'}
+              description={loading ? '' : projects.length ? '尝试清空搜索或切换创建人/状态筛选。' : '在创作工作台新建项目后会出现在这里。'}
+            />
+          )}
+        </div>
       </div>
     </>
   );

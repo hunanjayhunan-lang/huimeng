@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useMemo, useState } from 'react';
-import { Check, CheckCircle2, Clock3, FileText, Film, Image as ImageIcon, Layers, Search, XCircle } from 'lucide-react';
+import { Check, CheckCircle2, Clock3, FileText, Film, Image as ImageIcon, Layers, Search, Wallet, XCircle } from 'lucide-react';
 import { api } from '../api.js';
 import { EmptyState, ErrorBanner, PanelHeading } from './AdminWorkspace.jsx';
 
@@ -32,6 +32,9 @@ export default function MemberReviewPanel({ showOrg = false, onNotify, onOpenCan
   const [busyId, setBusyId] = useState('');
   const [rejectingId, setRejectingId] = useState('');
   const [rejectNote, setRejectNote] = useState('');
+  // 通过审核要先选择分配多少积分，所以「通过」打开对话框而不是直接提交。
+  const [approveTarget, setApproveTarget] = useState(null);
+  const [approveQuota, setApproveQuota] = useState('');
 
   const load = useCallback(async () => {
     setLoading(true);
@@ -63,19 +66,47 @@ export default function MemberReviewPanel({ showOrg = false, onNotify, onOpenCan
 
   useEffect(() => { load(); }, [load]);
 
-  const decide = async (item, action, note = '') => {
+  const decide = async (item, action, note = '', quota = null) => {
     setBusyId(item.id);
     try {
-      await api.decideOrgReview(item.id, action, note);
+      await api.decideOrgReview(item.id, action, note, quota);
       setRejectingId('');
       setRejectNote('');
-      onNotify?.(action === 'approve' ? `已通过「${item.title}」` : `已驳回「${item.title}」`);
+      onNotify?.(
+        action === 'approve'
+          ? `已通过「${item.title}」，并向 ${item.submitted_email} 分配 ${Number(quota)} 积分`
+          : `已驳回「${item.title}」`,
+      );
       await load();
     } catch (err) {
       onNotify?.(err.message || '审核操作失败');
     } finally {
       setBusyId('');
     }
+  };
+
+  // 打开通过对话框：清空输入，避免上一次的值残留成误操作。
+  const openApprove = item => {
+    setApproveTarget(item);
+    setApproveQuota('');
+  };
+
+  const closeApprove = () => {
+    setApproveTarget(null);
+    setApproveQuota('');
+  };
+
+  // 确认通过：积分必填且必须是正整数，否则不提交。
+  const confirmApprove = async () => {
+    if (!approveTarget) return;
+    const amount = Number(approveQuota);
+    if (!Number.isSafeInteger(amount) || amount <= 0) {
+      onNotify?.('请填写要分配的积分（正整数）');
+      return;
+    }
+    const target = approveTarget;
+    closeApprove();
+    await decide(target, 'approve', '', amount);
   };
 
   const filtered = useMemo(() => {
@@ -213,7 +244,7 @@ export default function MemberReviewPanel({ showOrg = false, onNotify, onOpenCan
                           type="button"
                           className="review-btn-approve"
                           disabled={isBusy}
-                          onClick={() => decide(item, 'approve')}
+                          onClick={() => openApprove(item)}
                         >
                           <Check size={13} />{isBusy ? '处理中…' : '通过'}
                         </button>
@@ -234,6 +265,46 @@ export default function MemberReviewPanel({ showOrg = false, onNotify, onOpenCan
           </div>
         )}
       </div>
+
+      {approveTarget && (
+        <div
+          className="admin-modal-backdrop"
+          onMouseDown={event => { if (event.target === event.currentTarget) closeApprove(); }}
+        >
+          <div className="admin-modal" role="dialog" aria-modal="true" aria-label="通过审核并分配积分">
+            <button type="button" className="modal-x" onClick={closeApprove} aria-label="关闭"><XCircle size={18} /></button>
+            <span className="modal-icon"><Wallet size={20} /></span>
+            <h2>通过审核</h2>
+            <p>{approveTarget.title}</p>
+            <label>分配给 {approveTarget.submitted_email} 的积分
+              <input
+                autoFocus
+                type="number"
+                min="1"
+                step="1"
+                value={approveQuota}
+                placeholder="必填，正整数"
+                onChange={event => setApproveQuota(event.target.value)}
+                onKeyDown={event => event.key === 'Enter' && confirmApprove()}
+              />
+            </label>
+            <p className="review-approve-hint">
+              审核通过后，这些积分会直接加到提交人本月的额度上（不是覆盖原有额度）。
+            </p>
+            <div className="modal-actions">
+              <button type="button" className="admin-outline" onClick={closeApprove}>取消</button>
+              <button
+                type="button"
+                className="admin-primary"
+                onClick={confirmApprove}
+                disabled={busyId === approveTarget.id}
+              >
+                <Check size={16} />确认通过并分配
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
     </section>
   );
 }
