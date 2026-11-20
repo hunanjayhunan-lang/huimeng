@@ -11,6 +11,7 @@ import {
   Plus,
   Sparkles,
   Video,
+  Wand2,
 } from 'lucide-react';
 import { api } from '../api.js';
 import { DEMO_PROJECTS, STYLES } from './workspaceDemo.js';
@@ -44,6 +45,7 @@ export default function HomeDashboard({ user, org, onNavigate, onOpenProject }) 
   const [projects, setProjects] = useState(DEMO_PROJECTS);
   const [counts, setCounts] = useState({ assets: 9, videos: 3, scripts: 1, tasks: 5 });
   const [loading, setLoading] = useState(true);
+  const [activeVideos, setActiveVideos] = useState([]);
 
   useEffect(() => {
     let cancelled = false;
@@ -92,6 +94,28 @@ export default function HomeDashboard({ user, org, onNavigate, onOpenProject }) 
   }, []);
 
   const pendingCount = projects.filter(p => p.status === 'review').length;
+
+  // 正在生成的视频：queued / running 的视频任务，页面可见时每 3 秒同步一次
+  useEffect(() => {
+    let cancelled = false;
+    const load = async () => {
+      try {
+        const data = await api.listTasks({ limit: 100 });
+        if (cancelled) return;
+        const live = (data?.items || [])
+          .filter(task => task.type === 'video' && (task.status === 'queued' || task.status === 'running'))
+          .sort((a, b) => (b.createdAt || 0) - (a.createdAt || 0));
+        setActiveVideos(live);
+      } catch {
+        // 后端不可用时保持现状，不打断首页
+      }
+    };
+    load();
+    const timer = setInterval(() => { if (!document.hidden) load(); }, 3000);
+    return () => { cancelled = true; clearInterval(timer); };
+  }, []);
+
+  const projectNameOf = id => projects.find(p => p.id === id)?.name;
 
   const stats = useMemo(() => [
     { key: 'projects', icon: FolderKanban, label: '我的项目', value: projects.length, color: '#2f6fb0' },
@@ -148,6 +172,56 @@ export default function HomeDashboard({ user, org, onNavigate, onOpenProject }) 
           </button>
         ))}
       </section>
+
+      {/* 正在生成的视频：真实 queued / running 任务，带进度条 */}
+      {activeVideos.length > 0 && (
+        <section className="hd-panel hd-generating">
+          <div className="hd-panel-head">
+            <div>
+              <h2>正在生成的视频 <span className="hd-generating-count">{activeVideos.length}</span></h2>
+              <p>实时进度，页面可见时每 3 秒刷新</p>
+            </div>
+            <button type="button" className="hd-link" onClick={() => onNavigate('成片')}>
+              全部成片 <ArrowRight size={13} />
+            </button>
+          </div>
+          <div className="hd-generating-list">
+            {activeVideos.slice(0, 4).map(task => {
+              const progress = Math.max(0, Math.min(100, task.status === 'running' ? (task.progress || 0) : 0));
+              const projectName = task.projectId ? projectNameOf(task.projectId) : null;
+              const prompt = (task.prompt || '').trim() || '未命名视频任务';
+              return (
+                <div key={task.id} className="hd-generating-row">
+                  <span className={`hd-generating-icon ${task.status}`}>
+                    {task.status === 'running' ? <Loader2 size={16} className="hd-spin" /> : <Wand2 size={16} />}
+                  </span>
+                  <div className="hd-generating-main">
+                    <div className="hd-generating-title">
+                      <b title={prompt}>{prompt.length > 42 ? `${prompt.slice(0, 42)}…` : prompt}</b>
+                      <span className={`hd-generating-tag ${task.status}`}>
+                        {task.status === 'running' ? `生成中 ${progress}%` : '排队中'}
+                      </span>
+                    </div>
+                    <div className="hd-generating-bar">
+                      <i className={task.status} style={{ width: `${task.status === 'queued' ? 4 : progress}%` }} />
+                    </div>
+                    <small className="hd-generating-meta">
+                      {projectName ? `${projectName} · ` : ''}
+                      {task.params?.duration ? `${task.params.duration}s · ` : ''}
+                      {task.quotaPoints ? `${task.quotaPoints} 点` : '视频'} · {relTime(task.createdAt)}
+                    </small>
+                  </div>
+                </div>
+              );
+            })}
+            {activeVideos.length > 4 && (
+              <button type="button" className="hd-generating-more" onClick={() => onNavigate('成片')}>
+                还有 {activeVideos.length - 4} 个视频在生成 <ArrowRight size={13} />
+              </button>
+            )}
+          </div>
+        </section>
+      )}
 
       {/* 最近项目 + 进行中的工作 */}
       <div className="hd-columns">

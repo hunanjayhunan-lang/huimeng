@@ -10,6 +10,8 @@ import {
   Check,
   ChevronDown,
   Clapperboard,
+  Eye,
+  EyeOff,
   FileText,
   Film,
   FolderKanban,
@@ -27,7 +29,6 @@ import {
   Play,
   Plus,
   RotateCcw,
-  Send,
   ShieldAlert,
   ShieldCheck,
   SlidersHorizontal,
@@ -51,12 +52,15 @@ import {
   IDEA_EXAMPLE,
   PRESET_SCRIPT,
   PROJECT_METADATA,
+  PUBLISH,
   RECOMMENDED_STYLE,
+  VIDEO_URL,
   STAGES,
   STYLES,
   VIDEO_SHOTS,
   primeWorkspace,
   resetWorkspace,
+  setAssetNodes,
 } from './workspaceDemo.js';
 import './WorkspacePage.css';
 
@@ -699,6 +703,8 @@ export default function WorkspacePage({ role, projectId: externalProjectId } = {
   const [reveal, setReveal] = useState({});
   const [pickedStyle, setPickedStyle] = useState(RECOMMENDED_STYLE);
   const [lockedStyle, setLockedStyle] = useState('');
+  const [povDecision, setPovDecision] = useState(null); // null=待决策 / 'skip'=跳过资产生成 / 'keep'=仍生成
+  const [povCharacters, setPovCharacters] = useState([]); // 识别出的第一视角角色清单
   const [assets, setAssets] = useState({});
   const [log, setLog] = useState([]);
   const [logOpen, setLogOpen] = useState(true);
@@ -764,7 +770,6 @@ export default function WorkspacePage({ role, projectId: externalProjectId } = {
   const [configOpen, setConfigOpen] = useState(false);
   const [config, setConfig] = useState(DEFAULT_CONFIG);
   const [rightTab, setRightTab] = useState('breakdown');
-  const [draft, setDraft] = useState('');
   const [previewImg, setPreviewImg] = useState(null);
   const [reviewState, setReviewState] = useState('idle'); // idle | checking | passed
   const [reviewChecks, setReviewChecks] = useState({ kit: true, script: false, style: false });
@@ -959,6 +964,15 @@ export default function WorkspacePage({ role, projectId: externalProjectId } = {
     setLog(list => [...list, { id, text, tone }]);
   };
 
+  // 识别剧本中“第一视角 / 主观镜头 / 不出镜”的角色（HITL 主动询问是否生成资产）
+  const detectPovCharacters = () => {
+    const marks = /(第一视角|主观镜头|不出镜|POV|fps)/i;
+    return (BREAKDOWN.characters || []).filter(c =>
+      marks.test(`${c.role || ''} ${c.look || ''} ${c.name || ''}`) &&
+      c.name !== '旁白'
+    );
+  };
+
   /* ---------- 第 1 步：剧本 ---------- */
   const startScript = (opts = {}) => {
     clearTimers();
@@ -970,6 +984,8 @@ export default function WorkspacePage({ role, projectId: externalProjectId } = {
     setReveal({});
     setRightTab('breakdown');
     setRightOpen(true);
+    setPovDecision(null);
+    setPovCharacters([]);
     setThread([{
       id: 'u1',
       kind: 'user',
@@ -1001,10 +1017,30 @@ export default function WorkspacePage({ role, projectId: externalProjectId } = {
 
     if (fromIdea) tool('t0', 'expand_script', '扩写成剧本', 1700, { type: 'script' });
     tool('t1', 'breakdown_script', '拆解场次 / 角色 / 道具 / 场景', 1600,
-      { type: 'text', text: '拆出 3 场 · 3 个角色 · 3 件道具 · 3 个场景' },
+      { type: 'text', text: `拆出 ${BREAKDOWN.scenes.length} 场 · ${BREAKDOWN.characters.length} 个角色 · ${BREAKDOWN.props.length} 件道具 · ${BREAKDOWN.places.length} 个场景` },
       () => {
         ['scenes', 'characters', 'props', 'places'].forEach((k, i) => later(i * 260, () => setReveal(r => ({ ...r, [k]: true }))));
       });
+
+    // HITL：拆解后检测第一视角角色，若有则主动停下询问是否生成资产
+    const povs = detectPovCharacters();
+    if (povs.length) {
+      setPovCharacters(povs);
+      later(t, () => {
+        setThread(list => [...list, {
+          id: 'pov-query',
+          kind: 'povQuery',
+          characters: povs,
+        }]);
+        setPhase('pov');
+      });
+      return;
+    }
+    runPostBreakdown(t, tool, fromIdea);
+  };
+
+  // 拆解之后、无 POV 询问时的后续流程（推荐风格 + 动捕 + 锁风格）
+  const runPostBreakdown = (t, tool, fromIdea) => {
     tool('t2', 'recommend_style', '从 8 种固定风格中推荐', 1200,
       { type: 'text', text: `推荐「${styleName(RECOMMENDED_STYLE)}」：悬疑题材，夜戏占 2/3，需要低照度与冷暖对比。` },
       () => setReveal(r => ({ ...r, style: true })));
@@ -1016,6 +1052,43 @@ export default function WorkspacePage({ role, projectId: externalProjectId } = {
       setThread(list => [...list, { id: 'gate', kind: 'styleGate' }]);
       setPhase('style');
     });
+  };
+
+  // 用户对第一视角角色资产做出决定后继续
+  const resolvePov = decision => {
+    setPovDecision(decision);
+    patchItem('pov-query', { resolved: decision === 'skip' ? 'skipped' : 'kept' });
+    // 跳过的角色：从资产清单移除，并在线程里说明
+    if (decision === 'skip') {
+      const skipIds = new Set(povCharacters.map(c => c.name));
+      const before = ASSET_NODES.length;
+      setAssetNodes(ASSET_NODES.filter(a => !(a.group === 'character' && skipIds.has(a.name))));
+      pushLog(`已按 HITL 决策跳过 ${povCharacters.map(c => c.name).join('、')} 的资产生成（第一视角 · 不出镜）`, 'warn');
+      showToast(`已跳过 ${povCharacters.map(c => c.name).join('、')} 的资产生成`);
+      setThread(list => [...list, {
+        id: 'pov-note',
+        kind: 'agent',
+        text: `遵循你的决定：${povCharacters.map(c => c.name).join('、')} 为第一视角，不生成资产图${before !== ASSET_NODES.length ? `，已从 ${before} 项减少到 ${ASSET_NODES.length} 项` : ''}。接下来继续推荐风格与动捕识别。`,
+      }]);
+    } else {
+      setThread(list => [...list, {
+        id: 'pov-note',
+        kind: 'agent',
+        text: `遵循你的决定：仍为 ${povCharacters.map(c => c.name).join('、')} 生成资产图。接下来继续推荐风格与动捕识别。`,
+      }]);
+    }
+    // 继续后续流程（推荐风格 + 动捕 + 锁风格）
+    let t = 700;
+    const tool = (id, name, label, runMs, detail, onDone) => {
+      later(t, () => setThread(list => [...list, { id, kind: 'tool', name, label, status: 'running' }]));
+      t += runMs;
+      later(t, () => {
+        patchItem(id, { status: 'ok', detail, duration: `${(runMs / 1000).toFixed(1)}s` });
+        onDone?.();
+      });
+      t += 450;
+    };
+    runPostBreakdown(t, tool, false);
   };
 
   const lockStyle = () => {
@@ -1467,7 +1540,7 @@ export default function WorkspacePage({ role, projectId: externalProjectId } = {
     clearTimers();
     setStage(0); setView('script'); setPhase('entry'); setThread([]); setReveal({});
     setPickedStyle(RECOMMENDED_STYLE); setLockedStyle(''); setAssets({}); setLog([]);
-    setSelectedId(''); setRightTab('breakdown'); setDraft('');
+    setSelectedId(''); setRightTab('breakdown');
     setReviewState('idle'); setReviewChecks({ kit: true, script: false, style: false });
     setScriptText(PRESET_SCRIPT.excerpt); setScriptDraft(PRESET_SCRIPT.excerpt);
     setScriptTitle(PRESET_SCRIPT.title); setScriptMeta(PRESET_SCRIPT.meta);
@@ -1477,14 +1550,6 @@ export default function WorkspacePage({ role, projectId: externalProjectId } = {
     showToast('演示已重置');
   };
 
-  const sendNote = () => {
-    const text = draft.trim();
-    if (!text) return;
-    setDraft('');
-    const id = `n-${Date.now()}`;
-    setThread(list => [...list, { id: `${id}-u`, kind: 'user', text }]);
-    later(700, () => setThread(list => [...list, { id: `${id}-a`, kind: 'agent', text: '收到，已写入本 Session 的约束，后续 Loop 会遵守。' }]));
-  };
 
   /* ---------- 画布数据 ---------- */
   const selectedAsset = ASSET_NODES.find(a => a.id === selectedId);
@@ -1730,6 +1795,36 @@ export default function WorkspacePage({ role, projectId: externalProjectId } = {
                   <span className="ws-hard-tag">→ {h.channel}</span>
                 </div>
               ))}
+            </div>
+          )}
+        </div>
+      );
+    }
+    if (item.kind === 'povQuery') {
+      const resolved = item.resolved;
+      return (
+        <div key={item.id} className={`ws-pov ${resolved ? 'resolved' : ''}`}>
+          <div className="ws-pov-head">
+            <Eye size={15} />
+            <b>HITL · 发现第一视角角色</b>
+            <span>需人工确认是否生成资产图</span>
+          </div>
+          <p className="ws-pov-desc">
+            识别到 {item.characters.map(c => c.name).join('、')} 在剧本中为「第一视角 / 主观镜头，全程不出镜」。
+          </p>
+          {resolved ? (
+            <div className="ws-pov-resolved">
+              <Check size={13} /> 已决定：{resolved === 'skipped' ? '跳过资产生成' : '仍生成资产图'}
+            </div>
+          ) : (
+            <div className="ws-gate-actions">
+              <button type="button" className="ws-btn primary" onClick={() => resolvePov('skip')}>
+                <EyeOff size={13} /> 跳过（不出镜）
+              </button>
+              <button type="button" className="ws-btn" onClick={() => resolvePov('keep')}>
+                仍要生成
+              </button>
+              <span className="ws-gate-hint">第一视角角色通常不需角色三视图</span>
             </div>
           )}
         </div>
@@ -2356,25 +2451,11 @@ export default function WorkspacePage({ role, projectId: externalProjectId } = {
                 <span>Agent 拆解剧本、推荐风格、标记动捕；你只需确认风格</span>
               </div>
               {phase !== 'entry' && (
-                <>
-                  <div className="ws-thread">
-                    {thread.map(renderItem)}
-                    {phase === 'running' && <div className="ws-typing"><i /><i /><i /></div>}
-                    <div ref={threadEndRef} />
-                  </div>
-                  <div className="ws-composer-wrap">
-                    <div className="ws-composer">
-                      <textarea
-                        rows={1}
-                        value={draft}
-                        onChange={e => setDraft(e.target.value)}
-                        onKeyDown={e => { if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); sendNote(); } }}
-                        placeholder="给 Agent 补充要求，例如：沈砚的眼镜换成金丝边"
-                      />
-                      <button type="button" className="ws-send" onClick={sendNote} aria-label="发送"><Send size={14} /></button>
-                    </div>
-                  </div>
-                </>
+                <div className="ws-thread">
+                  {thread.map(renderItem)}
+                  {phase === 'running' && <div className="ws-typing"><i /><i /><i /></div>}
+                  <div ref={threadEndRef} />
+                </div>
               )}
             </>
           )}
@@ -2625,27 +2706,23 @@ export default function WorkspacePage({ role, projectId: externalProjectId } = {
                 <div className="ws-shot-card done">
                   <div className="ws-shot-head">
                     <span className="ws-shot-no">成片预览</span>
-                    <b>超燃决战菜市场！（{scriptTitle} · 成片演示）</b>
-                    <span className="ws-shot-channel">暗调电影感 · 已过审</span>
+                    <b>{PUBLISH?.title || scriptTitle}（{scriptTitle} · 成片）</b>
+                    <span className="ws-shot-channel">已过审</span>
                   </div>
                   <div className="ws-publish-body">
                     <div className="ws-publish-video-wrap">
                       <video
                         className="ws-publish-video"
-                        src="/api/files/demo-caishichang.mp4"
+                        src={VIDEO_URL}
                         controls
                         preload="metadata"
                       />
                     </div>
                     <div className="ws-publish-copy">
                       <b>小红书 / 抖音宣发草稿（Agent 自动提炼）</b>
-                      <p>🌧️ 民国雨夜，一封无名电报把女记者苏晚引向“济世堂”后门…</p>
-                      <p>指针停在 3:15 的怀表、刻着「07 · 钟楼天台」的黄铜钥匙，还有那句“明晚三点十五，天台见”。</p>
+                      {(PUBLISH?.copy || []).map((line, i) => <p key={i}>{line}</p>)}
                       <div className="ws-publish-tags">
-                        <span>#民国悬疑</span>
-                        <span>#AI漫剧</span>
-                        <span>#雨巷迷踪</span>
-                        <span>#短剧推荐</span>
+                        {(PUBLISH?.tags || []).map(tag => <span key={tag}>{tag}</span>)}
                       </div>
                     </div>
                   </div>

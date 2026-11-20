@@ -116,6 +116,94 @@
 .hd-stat-arrow { color: #c3bcab; flex: none; transition: transform 0.16s ease, color 0.16s ease; }
 .hd-stat-card:hover .hd-stat-arrow { color: var(--accent-teal); transform: translateX(3px); }
 
+/* ---------- 正在生成的视频 ---------- */
+.hd-generating { margin-top: 0; }
+.hd-generating-count {
+  display: inline-grid;
+  place-items: center;
+  min-width: 20px;
+  height: 20px;
+  padding: 0 6px;
+  margin-left: 4px;
+  border-radius: 999px;
+  background: #eef4fb;
+  color: var(--accent-teal);
+  font-family: var(--font-sans);
+  font-size: 11.5px;
+  font-weight: 700;
+  vertical-align: middle;
+}
+.hd-generating-list { display: flex; flex-direction: column; }
+.hd-generating-row {
+  display: flex;
+  align-items: flex-start;
+  gap: 12px;
+  padding: 13px 18px;
+  border-bottom: 1px solid #f3eddb;
+}
+.hd-generating-row:last-child { border-bottom: 0; }
+.hd-generating-icon {
+  display: grid;
+  place-items: center;
+  width: 34px;
+  height: 34px;
+  flex: none;
+  border-radius: 10px;
+}
+.hd-generating-icon.running { color: #2f6fb0; background: #2f6fb014; }
+.hd-generating-icon.queued { color: #b5791c; background: #b5791c14; }
+.hd-generating-main { display: flex; flex-direction: column; gap: 6px; flex: 1; min-width: 0; }
+.hd-generating-title { display: flex; align-items: center; gap: 8px; min-width: 0; }
+.hd-generating-title b {
+  flex: 1;
+  min-width: 0;
+  font-size: 13.5px;
+  font-weight: 600;
+  color: #203144;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.hd-generating-tag {
+  flex: none;
+  padding: 2px 8px;
+  border-radius: 999px;
+  font-size: 11px;
+  font-weight: 600;
+}
+.hd-generating-tag.running { color: #2f6fb0; background: #2f6fb014; }
+.hd-generating-tag.queued { color: #b5791c; background: #b5791c14; }
+.hd-generating-bar {
+  height: 5px;
+  border-radius: 999px;
+  background: #f0e8d3;
+  overflow: hidden;
+}
+.hd-generating-bar i {
+  display: block;
+  height: 100%;
+  border-radius: 999px;
+  transition: width 0.4s ease;
+}
+.hd-generating-bar i.running { background: linear-gradient(90deg, #2f6fb0, #5c9bd8); }
+.hd-generating-bar i.queued { background: #d9c08a; }
+.hd-generating-meta { font-size: 11.5px; color: #8a929e; }
+.hd-generating-more {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 4px;
+  padding: 11px;
+  border: 0;
+  border-top: 1px solid #f3eddb;
+  background: transparent;
+  color: var(--accent-teal);
+  font-family: inherit;
+  font-size: 12.5px;
+  cursor: pointer;
+}
+.hd-generating-more:hover { background: #faf6ec; }
+
 /* ---------- 两栏布局 ---------- */
 .hd-columns {
   display: grid;

@@ -336,6 +336,17 @@ export let VIDEO_SHOTS = [
   },
 ];
 
+// 成片与发布信息（第 4/5 步）：优先读后端项目快照，否则用本地演示默认
+export let VIDEO_URL = '/api/files/demo-caishichang.mp4';
+export let PUBLISH = {
+  title: '超燃决战菜市场！',
+  copy: [
+    '🌧️ 民国雨夜，一封无名电报把女记者苏晚引向“济世堂”后门…',
+    '指针停在 3:15 的怀表、刻着「07 · 钟楼天台」的黄铜钥匙，还有那句“明晚三点十五，天台见”。',
+  ],
+  tags: ['#民国悬疑', '#AI漫剧', '#雨巷迷踪', '#短剧推荐'],
+};
+
 /* ============================================================
    数据注水：工作台内容优先读后端快照，读不到则回退本地常量。
    通过把上面的 `let` 绑定重新赋值实现——ESM live binding 会让
@@ -348,6 +359,8 @@ const WORKSPACE_DEFAULTS = {
   BREAKDOWN,
   ASSET_NODES,
   VIDEO_SHOTS,
+  VIDEO_URL,
+  PUBLISH,
 };
 
 /** 用后端快照覆盖工作台内容；返回是否成功注入 */
@@ -370,7 +383,14 @@ export function primeWorkspace(snapshot) {
   if (snapshot.breakdown) BREAKDOWN = snapshot.breakdown;
   if (Array.isArray(snapshot.assets) && snapshot.assets.length) ASSET_NODES = snapshot.assets;
   if (Array.isArray(snapshot.shots) && snapshot.shots.length) VIDEO_SHOTS = snapshot.shots;
+  if (snapshot.videoUrl) VIDEO_URL = snapshot.videoUrl;
+  if (snapshot.publish) PUBLISH = snapshot.publish;
   return true;
+}
+
+/** 设置资产节点（HITL 决策后排除第一视角角色） */
+export function setAssetNodes(nodes) {
+  ASSET_NODES = nodes;
 }
 
 /** 恢复到本地演示常量（切换到大没有快照的项目时用） */
@@ -381,4 +401,6 @@ export function resetWorkspace() {
   BREAKDOWN = WORKSPACE_DEFAULTS.BREAKDOWN;
   ASSET_NODES = WORKSPACE_DEFAULTS.ASSET_NODES;
   VIDEO_SHOTS = WORKSPACE_DEFAULTS.VIDEO_SHOTS;
+  VIDEO_URL = WORKSPACE_DEFAULTS.VIDEO_URL;
+  PUBLISH = WORKSPACE_DEFAULTS.PUBLISH;
 }
