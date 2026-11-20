@@ -1,0 +1,127 @@
+.an-wrap {
+  position: relative;
+}
+
+.an-badge {
+  position: absolute;
+  top: 6px;
+  right: 6px;
+  width: 7px;
+  height: 7px;
+  border-radius: 50%;
+  background: #d9534f;
+  box-shadow: 0 0 0 2px var(--admin-surface, #fff);
+}
+
+.an-panel {
+  position: absolute;
+  top: calc(100% + 10px);
+  right: 0;
+  width: 340px;
+  max-height: 420px;
+  display: flex;
+  flex-direction: column;
+  background: var(--admin-surface, #fff);
+  border: 1px solid rgba(0, 0, 0, 0.08);
+  border-radius: 12px;
+  box-shadow: 0 18px 44px rgba(20, 24, 40, 0.16);
+  z-index: 40;
+  overflow: hidden;
+}
+
+.an-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 12px 14px;
+  border-bottom: 1px solid rgba(0, 0, 0, 0.06);
+}
+
+.an-head strong {
+  display: block;
+  font-size: 14px;
+}
+
+.an-head small {
+  color: #8a8f9c;
+  font-size: 11px;
+}
+
+.an-head button {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  border: 0;
+  background: transparent;
+  color: #4d7fb5;
+  font-size: 12px;
+  cursor: pointer;
+  padding: 4px 6px;
+  border-radius: 6px;
+}
+
+.an-head button:hover {
+  background: rgba(77, 127, 181, 0.08);
+}
+
+.an-list {
+  list-style: none;
+  margin: 0;
+  padding: 6px;
+  overflow-y: auto;
+}
+
+.an-list li button {
+  width: 100%;
+  display: flex;
+  gap: 10px;
+  align-items: flex-start;
+  text-align: left;
+  padding: 10px;
+  border: 0;
+  border-radius: 8px;
+  background: transparent;
+  cursor: pointer;
+}
+
+.an-list li button:hover {
+  background: rgba(0, 0, 0, 0.04);
+}
+
+.an-list i {
+  flex: 0 0 7px;
+  width: 7px;
+  height: 7px;
+  margin-top: 6px;
+  border-radius: 50%;
+  background: transparent;
+}
+
+.an-list i.an-dot {
+  background: #4d7fb5;
+}
+
+.an-list span {
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+  min-width: 0;
+}
+
+.an-list strong {
+  font-size: 13px;
+  font-weight: 600;
+  line-height: 1.35;
+}
+
+.an-list small {
+  color: #8a8f9c;
+  font-size: 11px;
+}
+
+.an-empty {
+  padding: 24px 12px;
+  text-align: center;
+  color: #8a8f9c;
+  font-size: 12px;
+}

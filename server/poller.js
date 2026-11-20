@@ -1,8 +1,40 @@
-import { activeTasks, hasMediaCall, recordAiCall, recordTaskEvent, registerTaskFile, settleTaskQuota, updateTask } from './db.js';
+import { activeTasks, expireDueTrials, hasMediaCall, purgeExpiredAudit, recordAiCall, recordTaskEvent, registerTaskFile, settleTaskQuota, updateTask } from './db.js';
 import { provider } from './providers/index.js';
 import { config } from './config.js';
 
 let busy = false;
+let lastTrialScan = 0;
+let lastAuditPurge = 0;
+let lastNoticePurge = 0;
+
+// 每 5 分钟扫一次到期 trial，把 active 落库成 expired（幂等）
+const TRIAL_SCAN_INTERVAL_MS = 5 * 60 * 1000;
+// 审计清理一天跑一次就够
+const AUDIT_PURGE_INTERVAL_MS = 24 * 60 * 60 * 1000;
+// 通知清理一天一次
+const NOTICE_PURGE_INTERVAL_MS = 24 * 60 * 60 * 1000;
+
+function scanTrials() {
+  if (Date.now() - lastTrialScan < TRIAL_SCAN_INTERVAL_MS) return;
+  lastTrialScan = Date.now();
+  try {
+    const expired = expireDueTrials();
+    if (expired.length) console.log(`[poller] ${expired.length} 个组织试用到期已冻结：${expired.join(', ')}`);
+  } catch (error) {
+    console.error('[poller] 扫描试用到期失败', error);
+  }
+}
+
+function purgeAudit() {
+  if (Date.now() - lastAuditPurge < AUDIT_PURGE_INTERVAL_MS) return;
+  lastAuditPurge = Date.now();
+  try {
+    const removed = purgeExpiredAudit(config.auditRetentionDays);
+    if (removed) console.log(`[poller] 已清理 ${removed} 条过期审计记录（保留 ${config.auditRetentionDays} 天）`);
+  } catch (error) {
+    console.error('[poller] 清理审计失败', error);
+  }
+}
 
 async function tick() {
   const tasks = activeTasks();
@@ -98,6 +130,8 @@ export function startPoller() {
     if (busy) return;
     busy = true;
     try {
+      scanTrials();
+      purgeAudit();
       await tick();
     } catch (error) {
       console.error('[poller] tick 失败', error);

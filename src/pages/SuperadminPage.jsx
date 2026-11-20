@@ -1,27 +1,41 @@
 import { useCallback, useEffect, useMemo, useState } from 'react';
 import {
-  Activity, AlertTriangle, ArrowRight, Building2, Check, Cpu, Download, Gauge,
+  Activity, AlertTriangle, ArrowRight, BarChart3, Building2, Check, CheckCircle2, Cpu, Download, Gauge,
   MoreHorizontal, Search, ShieldAlert, UserPlus, Users, X,
 } from 'lucide-react';
 import { api } from '../api.js';
 import AdminWorkspace, { EmptyState, ErrorBanner, PanelHeading, Toast, useToast } from '../components/AdminWorkspace.jsx';
+import DouyinOpsPanel from '../components/DouyinOpsPanel.jsx';
+import MemberReviewPanel from '../components/MemberReviewPanel.jsx';
 import TracingPage from './TracingPage.jsx';
 import './SuperadminPage.css';
 
-const TAB_KEYS = { overview: 'overview', organizations: 'organizations', users: 'users', usage: 'usage', tracing: 'tracing', audit: 'audit' };
+const TAB_KEYS = { overview: 'overview', organizations: 'organizations', reviews: 'reviews', douyin: 'douyin', users: 'users', usage: 'usage', tracing: 'tracing', audit: 'audit' };
 const TABS = [
   { key: 'overview', label: '平台概览', icon: Activity },
   { key: 'organizations', label: '组织管理', icon: Building2 },
+  { key: 'reviews', label: '内容审核', icon: CheckCircle2 },
+  { key: 'douyin', label: '抖音运营', icon: BarChart3 },
   { key: 'users', label: '用户与权限', icon: Users },
   { key: 'usage', label: '平台用量', icon: Gauge },
   { key: 'tracing', label: '调用追踪', icon: Cpu },
   { key: 'audit', label: '操作审计', icon: ShieldAlert },
 ];
-const TAB_PATHS = { overview: '/admin/overview', organizations: '/admin/organizations', users: '/admin/users', usage: '/admin/usage', tracing: '/admin/tracing', audit: '/admin/audit' };
+const TAB_PATHS = { overview: '/admin/overview', organizations: '/admin/organizations', reviews: '/admin/reviews', douyin: '/admin/douyin', users: '/admin/users', usage: '/admin/usage', tracing: '/admin/tracing', audit: '/admin/audit' };
 const PATH_TABS = Object.fromEntries(Object.entries(TAB_PATHS).map(([key, path]) => [path, key]));
 const ORG_LIST_PATH = '/platform/organizations';
 
 const count = value => Number(value || 0).toLocaleString('zh-CN');
+
+// 组织状态展示：active / suspended / expired / archived
+const ORG_STATUS_META = {
+  active: { label: '正常', tone: 'ok' },
+  suspended: { label: '已暂停', tone: 'off' },
+  expired: { label: '试用到期', tone: 'warn' },
+  archived: { label: '已归档', tone: 'muted' },
+};
+const orgStatusMeta = status => ORG_STATUS_META[status] || ORG_STATUS_META.active;
+const isOrgLocked = status => Boolean(status) && status !== 'active';
 // 金额：小于 1000 保留两位，否则千分位取整
 const fmtMoney = value => {
   const n = Number(value || 0);
@@ -109,7 +123,7 @@ export default function SuperadminPage({ user, org, role = 'superadmin', onLogou
     const [overview, orgsRes, usersRes] = await Promise.all([
       api.platformOverview(),
       api.platformOrganizations().catch(() => ({ items: [] })),
-      api.platformUsers({}).catch(() => ({ items: [] })),
+      api.platformUsers({ limit: 500, offset: 0 }).catch(() => ({ items: [] })),
     ]);
     const orgs = orgsRes.items || [];
     const users = usersRes.items || [];
@@ -118,7 +132,7 @@ export default function SuperadminPage({ user, org, role = 'superadmin', onLogou
       organizations: orgs.map(org => ({
         id: org.id,
         label: org.name,
-        hint: `${count(org.memberCount)} 成员 · ${org.status === 'suspended' ? '已停用' : '正常'}`,
+        hint: `${count(org.memberCount)} 成员 · ${orgStatusMeta(org.status).label}`,
         path: `${ORG_LIST_PATH}/${encodeURIComponent(org.id)}`,
       })),
       users: users.map(user => ({
@@ -279,6 +293,10 @@ export default function SuperadminPage({ user, org, role = 'superadmin', onLogou
         />
       )}
 
+      {tab === TAB_KEYS.reviews && <MemberReviewPanel showOrg onNotify={showToast} onOpenCanvas={url => onNavigate?.(url)} />}
+
+      {tab === TAB_KEYS.douyin && <DouyinOpsPanel onNotify={showToast} />}
+
       {tab === TAB_KEYS.users && <PlatformUsers onToast={showToast} initialOrg={usersOrgFilter} />}
 
       {tab === TAB_KEYS.usage && <PlatformUsage organizations={organizations} onTrace={() => changeTab('tracing')} />}
@@ -432,38 +450,57 @@ function OverviewTrend({ trendWeek, trendMonth }) {
 
 function buildAlerts(totals, organizations) {
   const feed = [];
-  const lowQuota = organizations.filter(org => {
+  // 额度预警：与后端 quotaAlerts 一致的阈值（默认 warn 15% / critical 5%）
+  const quotaMeta = org => {
     const granted = Number(org.quota_granted) || 0;
     const remaining = Number(org.quota_remaining) || 0;
-    return granted > 0 && remaining / granted < 0.15;
-  });
+    const used = Number(org.quota_used) || 0;
+    const reserved = Number(org.quota_reserved) || 0;
+    const ratio = granted > 0 ? remaining / granted : (used + reserved > 0 ? 0 : 1);
+    let level = 'ok';
+    if (remaining <= 0 && (used + reserved) > 0) level = 'empty';
+    else if (ratio <= 0.05) level = 'critical';
+    else if (ratio <= 0.15) level = 'warn';
+    return { ratio, level };
+  };
+  const evaluated = organizations.map(org => ({ org, ...quotaMeta(org) }));
+  const criticalOrgs = evaluated.filter(item => item.level === 'empty' || item.level === 'critical');
+  const warnOrgs = evaluated.filter(item => item.level === 'warn');
+
+  if (criticalOrgs.length) {
+    const names = criticalOrgs.slice(0, 3).map(item => item.org.name).join('、');
+    feed.push({
+      key: 'quota-critical', icon: Gauge, label: '额度告急', tone: 'danger', target: 'organizations', time: '立即处理',
+      detail: `${criticalOrgs.length} 个组织额度已≤5%：${names}${criticalOrgs.length > 3 ? ' 等' : ''}`,
+    });
+  }
+  if (warnOrgs.length) {
+    const names = warnOrgs.slice(0, 3).map(item => item.org.name).join('、');
+    feed.push({
+      key: 'quota-warn', icon: Gauge, label: '额度预警', tone: 'warn', target: 'organizations', time: '建议关注',
+      detail: `${warnOrgs.length} 个组织剩余额度低于 15%：${names}${warnOrgs.length > 3 ? ' 等' : ''}`,
+    });
+  }
 
   // 动态事件：接入真实数据
   if (totals.users > 0) {
-    feed.push({ key: 'new-user', icon: UserPlus, label: '新用户加入', detail: `${count(totals.users)} 位用户已加入平台，待分配组织与角色`, target: 'users', tone: 'info', time: '11-19 09:24' });
+    feed.push({ key: 'new-user', icon: UserPlus, label: '平台用户', detail: `${count(totals.users)} 位用户已加入平台`, target: 'users', tone: 'info', time: '实时' });
   }
   if (totals.organizations > 0) {
     const latest = organizations[organizations.length - 1];
-    feed.push({ key: 'new-org', icon: Building2, label: '新组织创建', detail: latest?.name ? `「${latest.name}」已完成初始化，等待划拨额度` : `${count(totals.organizations)} 个组织处于活跃状态`, target: 'organizations', tone: 'info', time: '11-19 08:51' });
-  }
-  if (lowQuota.length) {
-    feed.push({ key: 'quota', icon: Gauge, label: '额度预警', detail: `${lowQuota.length} 个组织剩余额度低于 15%`, target: 'organizations', tone: 'warn', time: '11-19 08:12' });
+    feed.push({ key: 'new-org', icon: Building2, label: '组织概况', detail: latest?.name ? `「${latest.name}」等 ${count(totals.organizations)} 个组织在运行` : `${count(totals.organizations)} 个组织处于活跃状态`, target: 'organizations', tone: 'info', time: '实时' });
   }
   if (totals.failed_tasks > 0) {
-    feed.push({ key: 'failed', icon: AlertTriangle, label: '存在失败任务', detail: `${count(totals.failed_tasks)} 个任务失败，可在调用追踪排查`, target: 'tracing', tone: 'danger', time: '11-19 07:46' });
+    feed.push({ key: 'failed', icon: AlertTriangle, label: '存在失败任务', detail: `${count(totals.failed_tasks)} 个任务失败，可在调用追踪排查`, target: 'tracing', tone: 'danger', time: '实时' });
   }
   if (totals.active_tasks > 0) {
-    feed.push({ key: 'queue', icon: Activity, label: '任务处理中', detail: `${count(totals.active_tasks)} 个任务排队或运行中`, target: 'tracing', tone: 'info', time: '11-19 07:20' });
+    feed.push({ key: 'queue', icon: Activity, label: '任务处理中', detail: `${count(totals.active_tasks)} 个任务排队或运行中`, target: 'tracing', tone: 'info', time: '实时' });
   }
-
-  // 演示消息
-  feed.push({ key: 'org-member', icon: UserPlus, label: '成员加入组织', detail: '「青鸟动画」新增 2 位制作成员，已同步权限', target: 'organizations', tone: 'info', time: '11-18 17:03' });
-  feed.push({ key: 'billing', icon: Gauge, label: '额度划拨完成', detail: '「星河影业」额度调整至 5,000,000 Tokens', target: 'usage', tone: 'info', time: '11-18 15:40' });
 
   if (!feed.length) {
     feed.push({ key: 'ok', icon: Check, label: '平台运行正常', detail: '暂无需要处理的事件', target: 'overview', tone: 'ok', time: '刚刚' });
   }
-  return feed.slice(0, 5);
+  return feed.slice(0, 6);
 }
 
 function Alerts({ alerts, onOpen }) {
@@ -529,7 +566,7 @@ function ServiceHealth() {
 
 /* ---------- 用户与权限 ---------- */
 
-const ROLE_NAME = { superadmin: '平台管理员', 'org.admin': '组织管理员', 'org.user': '组织成员' };
+const ROLE_NAME = { superadmin: '平台管理员', 'org.admin': '组织管理员', 'org.reviewer': '审核员', 'org.user': '组织成员' };
 const DAY_MS = 86400000;
 
 /** 相对时间：未来/无效返回空串 */
@@ -559,7 +596,8 @@ function PlatformUsers({ onToast, initialOrg = '' }) {
   const load = useCallback(async () => {
     setLoading(true);
     try {
-      setData(await api.platformUsers());
+      // 当前页在客户端完成筛选/分页，所以一次拉足够多；后端已支持 limit/offset 真分页
+      setData(await api.platformUsers({ limit: 500, offset: 0 }));
       setError('');
     } catch (err) { setError(err.message); }
     finally { setLoading(false); }
@@ -682,6 +720,7 @@ function PlatformUsers({ onToast, initialOrg = '' }) {
             <option value="全部角色">全部角色</option>
             <option value="superadmin">平台管理员</option>
             <option value="org.admin">组织管理员</option>
+            <option value="org.reviewer">审核员</option>
             <option value="org.user">组织成员</option>
           </select>
           <select aria-label="筛选状态" value={statusFilter} onChange={event => setStatusFilter(event.target.value)}>
@@ -868,7 +907,7 @@ function PlatformUsage({ organizations, onTrace }) {
             const over = projRate > 1;
             return (
               <div
-                className={`usage-table-row usage-combined-row${org.status === 'suspended' ? ' is-disabled' : ''}${over ? ' is-over' : ''}`}
+                className={`usage-table-row usage-combined-row${isOrgLocked(org.status) ? ' is-disabled' : ''}${over ? ' is-over' : ''}`}
                 key={org.id}
                 onClick={onTrace}
                 role="button"
@@ -892,8 +931,8 @@ function PlatformUsage({ organizations, onTrace }) {
                     {granted && <em className={over ? 'is-over' : ''}>→{Math.round(projRate * 100)}%</em>}
                   </small>
                 </span>
-                <span className={`user-status ${org.status === 'suspended' ? 'disabled' : 'active'}`}>
-                  {org.status === 'suspended' ? '已停用' : '正常'}
+                <span className={`user-status ${isOrgLocked(org.status) ? 'disabled' : 'active'}`}>
+                  {orgStatusMeta(org.status).label}
                 </span>
               </div>
             );
@@ -1010,7 +1049,9 @@ function OrgTable({ rows, onChanged, onToast, onError, onOpenMembers }) {
         <select value={status} onChange={event => { setStatus(event.target.value); setPage(1); }} aria-label="筛选组织状态">
           <option value="all">所有状态</option>
           <option value="active">正常</option>
-          <option value="suspended">已停用</option>
+          <option value="suspended">已暂停</option>
+          <option value="expired">试用到期</option>
+          <option value="archived">已归档</option>
         </select>
         <select value={sort} onChange={event => setSort(event.target.value)} aria-label="排序方式">
           <option value="created_at">按创建时间</option>
@@ -1033,7 +1074,7 @@ function OrgTable({ rows, onChanged, onToast, onError, onOpenMembers }) {
               <span>{count(org.project_count)} / {count(org.task_count)}</span>
               <span>{count(org.quota_used)} / {count(org.quota_granted)} 积分</span>
               <span>{count(org.month_tokens)} tok</span>
-              <span>{org.status === 'suspended' ? '已停用' : '正常'}</span>
+              <span>{orgStatusMeta(org.status).label}</span>
             </div>
           ))}
           {!visible.length && <EmptyState title="没有匹配的组织" description="调整筛选条件再试。" />}
@@ -1114,7 +1155,7 @@ function OrganizationDetail({ org, onBack, onChanged, onToast, onError, granting
   const setStatus = async next => {
     try {
       await api.setPlatformOrgStatus(org.id, next);
-      onToast(`组织已${next === 'suspended' ? '停用' : '启用'}`);
+      onToast(`组织已${orgStatusMeta(next).label}`);
       await onChanged();
     } catch (err) { onError(err.message); }
   };
@@ -1127,21 +1168,21 @@ function OrganizationDetail({ org, onBack, onChanged, onToast, onError, granting
           <Users size={13} />查看成员
         </button>
         <button type="button" className="admin-primary" onClick={() => setQuotaOpen(true)}>划拨额度</button>
-        <button type="button" className="admin-outline" onClick={() => setStatus(org.status === 'suspended' ? 'active' : 'suspended')}>
-          {org.status === 'suspended' ? '启用' : '停用'}
+        <button type="button" className="admin-outline" onClick={() => setStatus(org.status === 'active' ? 'suspended' : 'active')}>
+          {org.status === 'active' ? '暂停' : '启用'}
         </button>
       </div>
       <div className="org-detail-heading">
         <div>
           <h1>{org.name}</h1>
           <p>
-            <span className={`org-status ${org.status === 'suspended' ? 'off' : ''}`}>{org.status === 'suspended' ? '已停用' : '正常'}</span>
+            <span className={`org-status ${org.status === 'active' ? '' : 'off'}`}>{orgStatusMeta(org.status).label}</span>
             <span className={`org-plan-tag tone-${planMeta.tone}`}>{planMeta.label}</span>
             <span>管理员 {org.admin_email || '待指派'}</span>
           </p>
         </div>
       </div>
-      {org.status === 'suspended' && <div className="org-suspended-banner">该组织已暂停，成员无法访问</div>}
+      {isOrgLocked(org.status) && <div className="org-suspended-banner">该组织{orgStatusMeta(org.status).label}，成员无法访问</div>}
 
       <div className="org-detail-metrics">
         <button

@@ -1,7 +1,8 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
-import { Bell, PanelLeftClose, PanelLeftOpen } from 'lucide-react';
+import { PanelLeftClose, PanelLeftOpen } from 'lucide-react';
 import GlobalSearch from './GlobalSearch.jsx';
 import AdminUserMenu from './AdminUserMenu.jsx';
+import AdminNotice from './AdminNotice.jsx';
 
 /**
  * 平台管理 / 组织管理 共用的侧栏工作区骨架。
@@ -19,6 +20,7 @@ export default function AdminWorkspace({
   activeTab,
   onTabChange,
   breadcrumbParent = '平台管理',
+  breadcrumbCurrent,
   userLabel = '管理员',
   userInitial = '管',
   statusOk = true,
@@ -93,13 +95,10 @@ export default function AdminWorkspace({
           <div className="workspace-breadcrumb">
             <span>{breadcrumbParent}</span>
             <b>/</b>
-            <strong>{tabs.find(tab => tab.key === activeTab)?.label || ''}</strong>
+            <strong>{breadcrumbCurrent ?? (tabs.find(tab => tab.key === activeTab)?.label || '')}</strong>
           </div>
           <GlobalSearch placeholder={searchPlaceholder} onNavigate={onSearchNavigate} loadIndex={loadSearchIndex} />
-          <button type="button" className="toolbar-icon" aria-label="通知">
-            <Bell size={17} />
-            <i />
-          </button>
+          <AdminNotice onTabChange={onTabChange} tabs={tabs} />
           <AdminUserMenu user={user} org={org} role={role} onLogout={onLogout} onNavigate={onNavigate} />
         </div>
         {children}

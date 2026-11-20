@@ -373,7 +373,10 @@ export default function ScriptsPage({ onOpenShots, projectId }) {
             <span><Film size={14} />{item.scenes ? `${item.scenes} 个分镜` : '切分镜中'}</span>
           </div>
           <div className="script-actions">
-            <button className="open-shots" onClick={() => onOpenShots?.(item.workspaceProjectId || 'proj-rain-alley')}>
+            <button className="open-shots" onClick={() => onOpenShots?.(
+              item.workspaceProjectId || item.projectId || 'proj-rain-alley',
+              item.workspaceProjectId ? null : item.id,
+            )}>
               {item.workspaceProjectId ? '在工作台打开' : '查看分镜'}
             </button>
             {!item.workspaceProjectId && (

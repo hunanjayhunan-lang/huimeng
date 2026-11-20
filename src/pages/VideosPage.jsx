@@ -47,7 +47,7 @@ function VideoCard({ task, view, onOpen }) {
           ? <video className="thumb-img" src={`${task.resultUrl}#t=0.1`} muted playsInline preload="metadata" aria-label={titleOf(task)} />
           : <img className="thumb-img" src={task.resultUrl} alt={titleOf(task)} loading="lazy" />)
         : <span className="thumb-cloud" aria-hidden="true" />}
-      <span className={`video-badge ${state}`}><i className={`status-dot dot-${state}`} />{VIEW_LABEL[state]}</span>
+      <span className={`video-badge ${state}`}><i className={`status-dot dot-${state}`} aria-hidden="true" />{VIEW_LABEL[state]}</span>
       <span className="thumb-duration">{sizeText(task)}</span>
       {task.status === 'done' && task.resultUrl && <span className="thumb-play" aria-hidden="true"><Sparkles size={16} /></span>}
       {state === 'processing' && <span className="thumb-progress"><i style={{ width: `${task.progress}%` }} /></span>}
@@ -147,7 +147,7 @@ function TaskDetail({ task, onBack, onCopy, onDownload, onRetry, onDelete, busy 
     </div>
 
     <div className="detail-heading">
-      <h1>{titleOf(task)}<span className={`video-badge inline ${state}`}><i className={`status-dot dot-${state}`} />{VIEW_LABEL[state]}</span></h1>
+      <h1>{titleOf(task)}<span className={`video-badge inline ${state}`}><i className={`status-dot dot-${state}`} aria-hidden="true" />{VIEW_LABEL[state]}</span></h1>
       <p>{task.reqKey} · {sizeText(task)} · 提交于 {timeText(task.createdAt)}{task.costMs ? ` · 耗时 ${(task.costMs / 1000).toFixed(1)}s` : ''}</p>
     </div>
 

@@ -20,6 +20,8 @@ export const config = {
   pollIntervalMs: Number(process.env.POLL_INTERVAL_MS || 1200),
   taskTimeoutMs: Number(process.env.TASK_TIMEOUT_MS || 15 * 60 * 1000),
   maxAttempts: Number(process.env.MAX_ATTEMPTS || 3),
+  // 审计日志留存天数：超过后由 poller 定期清理，0 表示不自动清理
+  auditRetentionDays: Number(process.env.AUDIT_RETENTION_DAYS || 180),
   // 积分定价：1 积分折合多少人民币。用于把真实成本换算成消耗积分。
   // 默认对齐一张 Seedream 图（¥0.12），所以图片任务正好 1 分。
   creditCny: Number(process.env.CREDIT_CNY || 0.12),

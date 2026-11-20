@@ -103,4 +103,72 @@ router.post('/breakdowns/:id/analyze', async (req, res) => {
   }
 });
 
+/* 提示词改写：AI 对话里“改提示词/补充”的落地接口。
+   - llm 启用时：模型输出清洗后的新提示词（JSON）
+   - 未启用时：规则兜底，避免把用户口语原样拼进提示词 */
+router.post('/ai/rewrite-prompt', async (req, res) => {
+  const { current = '', instruction = '', context = {} } = req.body || {};
+  const ins = String(instruction || '').trim();
+  if (!ins) return res.status(400).json({ error: 'instruction 不能为空' });
+
+  const norm = s => String(s || '').replace(/[\s，,。；;、]/g, '');
+  const base = String(current || '');
+
+  // 规则兜底：判断是否像“改提示词”的请求
+  const looksModify = /(改成|改为|换成|替换|去掉|删除|加|增加|补|背景|颜色|光线|风格|更亮|更暗|更|太|不要|变成|把|画幅|构图|镜头|优化|修正)/.test(ins)
+    && !/(不变|原样|无需修改|不用改|不要改|维持原|保持原)/.test(ins);
+
+  const ruleRewrite = () => {
+    let after = base;
+    const notes = [];
+    if (/背景/.test(ins) && /(黑|暗|过暗|太黑)/.test(ins)) {
+      after = after.replace(/?\s*暗调剪影感/g, '').replace(/[，,]?\s*$/, '');
+      after = `${after}；浅灰纯色背景，均匀明亮布光，背景避免过暗`;
+      notes.push('背景改为浅灰纯色、均匀布光');
+    }
+    if (!notes.length && /(更暗|压暗|暗部)/.test(ins)) {
+      after = `${after}；低照度，暗部压低`;
+      notes.push('整体压暗');
+    }
+    if (/(胶片|颗粒|35mm)/i.test(ins) && !/胶片|颗粒/.test(after)) {
+      after = `${after}；35mm 胶片颗粒`;
+      notes.push('增加胶片颗粒');
+    }
+    if (!notes.length) {
+      const clean = ins.replace(/帮我|帮忙|请|麻烦|改一下|改改|修改|调整|一下|的?提示词|把|这个|这句|背景/g, '').trim();
+      after = base ? `${base}；${clean || ins}` : (clean || ins);
+      notes.push('追加要求');
+    }
+    const cleaned = after.replace(/，{2,}/g, '，').replace(/；{2,}/g, '；').replace(/^[；，,\s]+/, '');
+    return { after: cleaned, changed: norm(cleaned) !== norm(base), summary: `已按你的要求调整：${notes.join('；')}。` };
+  };
+
+  if (!llm.isEnabled()) {
+    if (looksModify) {
+      const r = ruleRewrite();
+      return res.json({ action: 'modify_prompt', after: r.after, changed: r.changed, summary: r.summary, model: 'mock' });
+    }
+    return res.json({ action: 'reply', reply: '收到。要改提示词可以直接说，例如「把背景改成深灰」。', model: 'mock' });
+  }
+
+  try {
+    const { data } = await llm.chatJson([
+      { role: 'system', content: '你是创作工作台的助手，可按需调用一个工具。判断用户意图，只输出 JSON：\n- 若用户要求修改/优化提示词（背景、颜色、光线、风格、构图、增删元素等），返回 {"action":"modify_prompt","after":"改写后的完整提示词","summary":"一句话说明"}\n- 否则（闲聊、确认、提问、表示保持不变等），返回 {"action":"reply","reply":"自然、简短的中文回复"}\n要求：after 只能是指示词本身，绝不能包含“阶段/对象”等说明；不要复述用户指令；不要保留“帮我改一下”等口语。' },
+      { role: 'user', content: `当前提示词：${base.slice(0, 600)}\n用户指令：${ins.slice(0, 300)}` },
+    ], { maxTokens: 600, temperature: 0.4, kind: 'prompt_rewrite' });
+
+    if (data?.action === 'modify_prompt' && data.after) {
+      const after = String(data.after).trim().slice(0, 800);
+      return res.json({ action: 'modify_prompt', after, changed: norm(after) !== norm(base), summary: String(data.summary || '已生成修订建议。').slice(0, 160) });
+    }
+    return res.json({ action: 'reply', reply: String(data?.reply || data?.summary || '好的，收到。').slice(0, 300) });
+  } catch (error) {
+    if (looksModify) {
+      const r = ruleRewrite();
+      return res.json({ action: 'modify_prompt', after: r.after, changed: r.changed, summary: r.summary, model: 'mock', warning: error.message });
+    }
+    return res.json({ action: 'reply', reply: '好的，收到。', model: 'mock', warning: error.message });
+  }
+});
+
 export default router;

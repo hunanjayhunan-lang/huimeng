@@ -1,10 +1,12 @@
 import { Router } from 'express';
 import { aiUsageSummary, getTask, listAiCalls, listTaskEvents, organizationExists, recentTaskTraces, stats, tracingDailySeries } from '../db.js';
 import { inOrg } from '../org-context.js';
+import { hasPermission } from '../permissions.js';
 
 const router = Router();
 
 router.use((req, res, next) => {
+  if (!hasPermission(req.role, 'org.tracing.view')) return res.status(403).json({ error: '只有组织管理员可以查看调用追踪' });
   if (req.role === 'superadmin') {
     const orgId = typeof req.query.orgId === 'string' ? req.query.orgId : '';
     // 平台管理员：all / 缺省 = 跨组织查看全部；null 表示不做组织过滤
@@ -14,9 +16,8 @@ router.use((req, res, next) => {
   }
   if (req.org?.role === 'org.admin') {
     if (req.query.orgId && req.query.orgId !== req.org.id) return res.status(403).json({ error: '不能查看其他组织的追踪记录' });
-    return next();
   }
-  return res.status(403).json({ error: '只有组织管理员可以查看调用追踪' });
+  return next();
 });
 
 const sinceTs = days => Date.now() - Math.max(1, Math.min(90, Number(days) || 7)) * 86400000;

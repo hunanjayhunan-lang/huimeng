@@ -10,3 +10,6 @@ server/uploads/
 server/.env
 server/.out.log
 server/.err.log
+
+# 环境变量（含密钥，勿提交）
+.env

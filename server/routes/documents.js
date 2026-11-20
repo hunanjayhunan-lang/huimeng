@@ -152,6 +152,12 @@ router.get('/documents/:kind', requireKind, (req, res) => {
   res.json({ items: req.query.projectId ? items.filter(item => item.projectId === req.query.projectId) : items });
 });
 
+router.get('/documents/:kind/:id', requireKind, (req, res) => {
+  const doc = getDocument(req.params.id);
+  if (!doc || doc.kind !== req.params.kind) return res.status(404).json({ error: '记录不存在' });
+  return res.json(doc);
+});
+
 router.post('/documents/:kind', requireKind, (req, res) => {
   const body = req.body && typeof req.body === 'object' ? req.body : {};
   if (body.projectId && getDocument(body.projectId)?.kind !== 'projects') return res.status(404).json({ error: '项目不存在' });

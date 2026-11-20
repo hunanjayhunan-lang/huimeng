@@ -34,7 +34,7 @@ export const STYLES = [
 ];
 export const RECOMMENDED_STYLE = 'noir';
 
-export const PRESET_SCRIPT = {
+export let PRESET_SCRIPT = {
   title: '《雨巷迷踪》EP01 · 停走的怀表',
   meta: '民国悬疑短剧 · 3 场 · 约 90 秒',
   excerpt: [
@@ -72,7 +72,7 @@ export const PRESET_SCRIPT = {
 export const IDEA_EXAMPLE = '民国雨夜，女记者追查一桩失踪案，线索指向一只停走的怀表。';
 
 // 一、项目级属性（Project Metadata · Agent Harness 全局上下文）
-export const PROJECT_METADATA = {
+export let PROJECT_METADATA = {
   title: '《雨巷迷踪》EP01 · 停走的怀表',
   synopsis: '民国雨夜，女记者苏晚追查一桩失踪案，尾随神秘人至济世堂药铺，从账房沈砚手中拿到停在 3:15 的怀表与 07 号黄铜钥匙，次日黄昏追至钟楼天台揭开“明晚三点十五，天台见”的新悬念。',
   aspect_ratio: '16:9',
@@ -101,7 +101,7 @@ export const PROJECT_METADATA = {
 };
 
 // 二、最终给 AI 的结构化剧本（YAML）
-export const AI_SCRIPT_YAML = `project:
+export let AI_SCRIPT_YAML = `project:
   title: ${PROJECT_METADATA.title}
   aspect_ratio: "${PROJECT_METADATA.aspect_ratio}"
   visual_style: ${PROJECT_METADATA.visual_style}
@@ -203,7 +203,7 @@ scenes:
           - 严禁文生视频直出`;
 
 // 剧本拆解结果
-export const BREAKDOWN = {
+export let BREAKDOWN = {
   scenes: [
     { id: 'sc1', no: '第1场', place: '雨夜老街', time: '夜 / 外', beat: '苏晚撑伞尾随神秘人进入窄巷' },
     { id: 'sc2', no: '第2场', place: '药铺内景', time: '夜 / 内', beat: '沈砚推出怀表，揭示失踪者已死' },
@@ -231,7 +231,7 @@ export const BREAKDOWN = {
 
 // 第 2 步画布上的资产节点
 // failFirst：首轮自检故意不过，演示自动重跑
-export const ASSET_NODES = [
+export let ASSET_NODES = [
   { id: 'a-c1', group: 'character', name: '苏晚', sub: '人物三视图', img: charSuwan, prompt: '民国女记者，短发，米色风衣，手持油纸伞，正/侧/背三视图，纯色背景' },
   { id: 'a-c2', group: 'character', name: '沈砚', sub: '人物三视图', img: charShenyan, prompt: '民国药铺账房，长衫，圆框眼镜，神情冷峻，正/侧/背三视图，纯色背景' },
   { id: 'a-c3', group: 'character', name: '神秘人', sub: '人物三视图', img: charMystery, prompt: '民国黑衣神秘人，黑色礼帽、立领长风衣、帽檐压低遮脸，暗调剪影感，正/侧/背三视图' },
@@ -277,42 +277,10 @@ export const DEMO_PROJECTS = [
     quotaLimit: 1000,
     updatedAt: '刚刚',
   },
-  {
-    id: 'proj-herb-shop',
-    name: '《济世堂秘闻》先导片',
-    desc: '古风药铺里的奇闻异事，账房先生与女记者联手破局。',
-    genre: '古风奇幻动画',
-    styleKey: 'ink',
-    cover: sceneHerbShop,
-    sessionsCount: 1,
-    stageIndex: 4,
-    status: 'active',
-    statusText: '已完成 · 待发布',
-    favorite: false,
-    quotaUsed: 90,
-    quotaLimit: 600,
-    updatedAt: '2 小时前',
-  },
-  {
-    id: 'proj-rooftop',
-    name: '《长夜将明》第1季',
-    desc: '都市谍战，黄昏天台上的追逐与真相。',
-    genre: '都市谍战短剧',
-    styleKey: 'film',
-    cover: sceneRooftopDusk,
-    sessionsCount: 2,
-    stageIndex: 2,
-    status: 'review',
-    statusText: '待审核',
-    favorite: false,
-    quotaUsed: 310,
-    quotaLimit: 1000,
-    updatedAt: '昨天',
-  },
 ];
 
 // 第 4 步：AI 根据剧本 + 已过审资产生成的分镜视频提示词（@资产名 会被渲染为资产链接标签）
-export const VIDEO_SHOTS = [
+export let VIDEO_SHOTS = [
   {
     id: 'shot-1',
     scene: '第1场',
@@ -367,3 +335,50 @@ export const VIDEO_SHOTS = [
     ].join('\n'),
   },
 ];
+
+/* ============================================================
+   数据注水：工作台内容优先读后端快照，读不到则回退本地常量。
+   通过把上面的 `let` 绑定重新赋值实现——ESM live binding 会让
+   WorkspacePage 里对同名导入的读取实时拿到新值。
+   ============================================================ */
+const WORKSPACE_DEFAULTS = {
+  PROJECT_METADATA,
+  PRESET_SCRIPT,
+  AI_SCRIPT_YAML,
+  BREAKDOWN,
+  ASSET_NODES,
+  VIDEO_SHOTS,
+};
+
+/** 用后端快照覆盖工作台内容；返回是否成功注入 */
+export function primeWorkspace(snapshot) {
+  if (!snapshot || typeof snapshot !== 'object') return false;
+  // 只有项目卡、没有内容快照时返回 false，让调用方回退到默认常量，避免串数据
+  const hasContent = snapshot.metadata || snapshot.script || snapshot.breakdown
+    || (Array.isArray(snapshot.assets) && snapshot.assets.length)
+    || (Array.isArray(snapshot.shots) && snapshot.shots.length);
+  if (!hasContent) return false;
+  if (snapshot.metadata) PROJECT_METADATA = snapshot.metadata;
+  if (snapshot.script) {
+    PRESET_SCRIPT = {
+      title: snapshot.script.title ?? PRESET_SCRIPT.title,
+      meta: snapshot.script.meta ?? PRESET_SCRIPT.meta,
+      excerpt: snapshot.script.excerpt ?? PRESET_SCRIPT.excerpt,
+    };
+    if (snapshot.script.yaml) AI_SCRIPT_YAML = snapshot.script.yaml;
+  }
+  if (snapshot.breakdown) BREAKDOWN = snapshot.breakdown;
+  if (Array.isArray(snapshot.assets) && snapshot.assets.length) ASSET_NODES = snapshot.assets;
+  if (Array.isArray(snapshot.shots) && snapshot.shots.length) VIDEO_SHOTS = snapshot.shots;
+  return true;
+}
+
+/** 恢复到本地演示常量（切换到大没有快照的项目时用） */
+export function resetWorkspace() {
+  PROJECT_METADATA = WORKSPACE_DEFAULTS.PROJECT_METADATA;
+  PRESET_SCRIPT = WORKSPACE_DEFAULTS.PRESET_SCRIPT;
+  AI_SCRIPT_YAML = WORKSPACE_DEFAULTS.AI_SCRIPT_YAML;
+  BREAKDOWN = WORKSPACE_DEFAULTS.BREAKDOWN;
+  ASSET_NODES = WORKSPACE_DEFAULTS.ASSET_NODES;
+  VIDEO_SHOTS = WORKSPACE_DEFAULTS.VIDEO_SHOTS;
+}

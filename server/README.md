@@ -44,6 +44,13 @@ server/
 统一前缀 `/api`。除健康检查、注册和登录外，所有接口都要求登录会话；业务查询由服务端会话确定 Org，并按 `org_id` 隔离。登录响应提供 Bearer token，浏览器也会收到 HttpOnly 会话 Cookie。
 设置 `SUPERADMIN_EMAILS`（逗号分隔）可将指定登录邮箱标记为平台管理员。
 
+### 权限与组织状态
+
+- 权限矩阵集中在 `server/permissions.js`，路由用 `requirePermission(action)` 校验；会话接口额外返回 `permissions` 数组。
+- 组织状态：`active` / `suspended` / `expired` / `archived`。trial 到期会自动变为 `expired`（`effectiveOrgStatus` 现算 + `expireDueTrials` 定时落库）。
+- 非 `active` 组织的成员不能登录、业务接口一律 403；归档/停用会删除该组织全部会话（superadmin 会话保留，保证可恢复）。
+- 归档 = 软删除：数据全部保留，`POST /platform/orgs/:id/restore` 可恢复；套餐从 trial 升级到付费会自动解冻 `expired` 组织。
+
 | 方法 | 路径 | 说明 |
 | --- | --- | --- |
 | GET | `/health` | 健康检查（含当前 provider） |
@@ -58,21 +65,32 @@ server/
 | GET/POST | `/org/invites` | 查看或创建 7 天邀请链接（管理员） |
 | POST | `/org/invites/:id/resend` | 重新生成邀请链接（管理员） |
 | DELETE | `/org/invites/:id` | 撤回邀请（管理员） |
-| GET | `/org/audit` | 查看 Org 管理操作记录（管理员） |
-| GET | `/org/quota` | 管理员查看 Org 与成员积分；普通成员查看本人积分（含 `costCny` 实际花费） |
+| GET | `/org/audit` | 查看 Org 管理操作记录（管理员）；支持 `action` / `actor` / `from` / `to` / `q` / `limit` / `offset` |
+| GET | `/org/audit/export` | 导出 Org 审计 CSV（相同筛选参数，上限 5000 条） |
+| GET | `/platform/audit` | 跨组织审计查询（superadmin）；同样支持筛选与分页 |
+| GET | `/platform/audit/export` | 导出平台审计 CSV（superadmin） |
+| GET | `/org/quota` | 管理员查看 Org 与成员积分（含 `alerts` 预警）；普通成员查看本人积分（含 `costCny` 实际花费） |
+| GET | `/org/quota/alerts` | 额度预警，`?warn=&critical=` 可调阈值（管理员） |
+| GET | `/org/quota/usage` | 额度使用明细，`?userId=&period=&status=&limit=&offset=`（管理员） |
+| GET | `/org/quota/export` | 导出额度明细 CSV（管理员） |
 | PUT | `/org/members/:id/quota` | 设置成员本月积分上限（管理员） |
+| PUT | `/org/quota/members` | 批量分配成员积分，`{ items: [{userId,amount}] }`，原子事务（管理员） |
+| POST | `/org/members/:id/quota/clear` | 清零成员额度（有已用/预占时拒）（管理员） |
+| POST | `/org/quota/revoke` | 回收组织额度，`{ amount }`（不能回收已用/预占）（管理员） |
 | GET | `/org/profile` | 组织基本信息（管理员） |
 | PATCH | `/org/profile` | 修改组织名称，写审计（管理员） |
 | GET | `/org/options` | 组织下拉选项；superadmin 看全部，org.admin 只看自己 |
 | GET | `/org/usage` | 组织用量与任务汇总，`?days=30`（管理员看全组织、成员只看本人） |
 | GET | `/platform/overview` | 平台统计与组织管理审计（superadmin） |
 | GET | `/platform/orgs` | 列出组织、成员数和管理员（superadmin） |
-| GET | `/platform/users` | 跨组织用户目录，`?role=&status=&orgId=&q=`（superadmin） |
+| GET | `/platform/users` | 跨组织用户目录，`?role=&status=&orgId=&q=&limit=&offset=`（服务端真分页，返回 `total`）（superadmin） |
 | PATCH | `/platform/users/:id/status` | 启用 / 停用账号，停用会立即撤销全部会话（superadmin） |
 | POST | `/platform/users/:id/revoke-sessions` | 强制指定账号下线（superadmin） |
 | POST | `/platform/orgs/:id/quota` | 按自然月给 Org 划拨额度点（superadmin） |
 | POST | `/platform/orgs` | 创建 Org 并为管理员邮箱生成邀请（superadmin） |
-| PATCH | `/platform/orgs/:id/status` | 启用或暂停 Org（superadmin） |
+| PATCH | `/platform/orgs/:id/status` | 设置 Org 状态：`active` / `suspended` / `expired` / `archived`（superadmin） |
+| DELETE | `/platform/orgs/:id` | 归档 Org（软删除，数据保留，可恢复）（superadmin） |
+| POST | `/platform/orgs/:id/restore` | 恢复已归档/停用的 Org 为 `active`（superadmin） |
 | PATCH | `/platform/orgs/:id/admin` | 将现有 Org 成员设为管理员（superadmin） |
 | GET | `/config` | 当前 provider、req_key、轮询间隔、超时 |
 | GET | `/stats` | 任务总数 / 成功 / 失败 / 进行中 |
@@ -268,6 +286,7 @@ ARK_PRICE_VIDEO=46          # 元/百万 tokens（Seedance-2.5-flash，不含视
 - 单进程内存轮询，重启后 `queued/running` 会继续被轮询，但并发没有上限；要用在生产得换 BullMQ / 定时任务 + 并发闸门。
 - 产物存本地磁盘，没接 OSS；没有清理策略（可以按 `created_at` 定期删）。
 - 还没有回调（`callback_url`）模式，只有轮询；公网可访问时可以二选一。
-- 前端已接：「成片」真实任务、「剧本」「画布」「项目」「拆解」「智能体」「数据」「分发」「调用追踪」以及**两个管理面板全部 tab**。「资产」页仍是前端演示数据。
+- 前端已接：「首页」「工作台」「创作」「成片」「剧本」「画布」「项目」「拆解」「智能体」「数据」「分发」「调用追踪」以及**两个管理面板全部 tab**。「资产」页仍是前端演示数据（后端已允许 `documents/assets`，页面尚未接入）。
+- 成员内容审核（`member_reviews` 表、`org.reviewer` 角色、`listMemberReviews` / `createMemberReview` / `decideMemberReview`）在 `db.js` 已有数据层与审计，但**没有对应路由和前端入口**，尚未接线。
 - 平台管理员名单由 `SUPERADMIN_EMAILS` 环境变量控制，面板上不能授予/撤销（避免自我提权）；面板里也不能停用 superadmin 账号。
 - 账号停用会立即删除该用户全部会话，但“重置密码”尚未实现（需要发信渠道）。

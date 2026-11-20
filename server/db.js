@@ -16,9 +16,9 @@ db.exec('PRAGMA foreign_keys = ON');
 db.exec(`
   CREATE TABLE IF NOT EXISTS orgs (id TEXT PRIMARY KEY, name TEXT NOT NULL, status TEXT NOT NULL DEFAULT 'active', created_at INTEGER NOT NULL);
   CREATE TABLE IF NOT EXISTS users (id TEXT PRIMARY KEY, email TEXT NOT NULL UNIQUE, password_hash TEXT NOT NULL, created_at INTEGER NOT NULL);
-  CREATE TABLE IF NOT EXISTS org_members (org_id TEXT NOT NULL REFERENCES orgs(id) ON DELETE CASCADE, user_id TEXT NOT NULL UNIQUE REFERENCES users(id) ON DELETE CASCADE, role TEXT NOT NULL CHECK(role IN ('org.admin','org.user')), created_at INTEGER NOT NULL, PRIMARY KEY(org_id,user_id));
+  CREATE TABLE IF NOT EXISTS org_members (org_id TEXT NOT NULL REFERENCES orgs(id) ON DELETE CASCADE, user_id TEXT NOT NULL UNIQUE REFERENCES users(id) ON DELETE CASCADE, role TEXT NOT NULL CHECK(role IN ('org.admin','org.reviewer','org.user')), created_at INTEGER NOT NULL, PRIMARY KEY(org_id,user_id));
   CREATE TABLE IF NOT EXISTS sessions (token_hash TEXT PRIMARY KEY, user_id TEXT NOT NULL REFERENCES users(id) ON DELETE CASCADE, created_at INTEGER NOT NULL, expires_at INTEGER NOT NULL);
-  CREATE TABLE IF NOT EXISTS org_invites (id TEXT PRIMARY KEY, org_id TEXT NOT NULL REFERENCES orgs(id) ON DELETE CASCADE, email TEXT NOT NULL, role TEXT NOT NULL CHECK(role IN ('org.admin','org.user')), token_hash TEXT NOT NULL UNIQUE, created_at INTEGER NOT NULL, expires_at INTEGER NOT NULL);
+  CREATE TABLE IF NOT EXISTS org_invites (id TEXT PRIMARY KEY, org_id TEXT NOT NULL REFERENCES orgs(id) ON DELETE CASCADE, email TEXT NOT NULL, role TEXT NOT NULL CHECK(role IN ('org.admin','org.reviewer','org.user')), token_hash TEXT NOT NULL UNIQUE, created_at INTEGER NOT NULL, expires_at INTEGER NOT NULL);
   CREATE TABLE IF NOT EXISTS org_audit_logs (id TEXT PRIMARY KEY, org_id TEXT NOT NULL, actor_user_id TEXT, action TEXT NOT NULL, target TEXT, details TEXT, created_at INTEGER NOT NULL);
   INSERT OR IGNORE INTO orgs(id,name,created_at) VALUES ('bootstrap','默认工作区',${Date.now()});
 `);
@@ -42,6 +42,48 @@ db.exec(`
   }
 }
 {
+  const membersSql = db.prepare("SELECT sql FROM sqlite_master WHERE type='table' AND name='org_members'").get()?.sql || '';
+  if (membersSql && !membersSql.includes('org.reviewer')) {
+    db.exec('PRAGMA foreign_keys = OFF');
+    db.exec('BEGIN IMMEDIATE');
+    try {
+      db.exec('ALTER TABLE org_members RENAME TO org_members_old');
+      db.exec("CREATE TABLE org_members (org_id TEXT NOT NULL REFERENCES orgs(id) ON DELETE CASCADE, user_id TEXT NOT NULL UNIQUE REFERENCES users(id) ON DELETE CASCADE, role TEXT NOT NULL CHECK(role IN ('org.admin','org.reviewer','org.user')), created_at INTEGER NOT NULL, PRIMARY KEY(org_id,user_id))");
+      db.exec('INSERT INTO org_members SELECT org_id, user_id, role, created_at FROM org_members_old');
+      db.exec('DROP TABLE org_members_old');
+      db.exec('COMMIT');
+    } catch (error) { db.exec('ROLLBACK'); throw error; }
+    finally { db.exec('PRAGMA foreign_keys = ON'); }
+  }
+  const invitesSql = db.prepare("SELECT sql FROM sqlite_master WHERE type='table' AND name='org_invites'").get()?.sql || '';
+  if (invitesSql && !invitesSql.includes('org.reviewer')) {
+    db.exec('PRAGMA foreign_keys = OFF');
+    db.exec('BEGIN IMMEDIATE');
+    try {
+      db.exec('ALTER TABLE org_invites RENAME TO org_invites_old');
+      db.exec("CREATE TABLE org_invites (id TEXT PRIMARY KEY, org_id TEXT NOT NULL REFERENCES orgs(id) ON DELETE CASCADE, email TEXT NOT NULL, role TEXT NOT NULL CHECK(role IN ('org.admin','org.reviewer','org.user')), token_hash TEXT NOT NULL UNIQUE, created_at INTEGER NOT NULL, expires_at INTEGER NOT NULL)");
+      db.exec('INSERT INTO org_invites SELECT id, org_id, email, role, token_hash, created_at, expires_at FROM org_invites_old');
+      db.exec('DROP TABLE org_invites_old');
+      db.exec('COMMIT');
+    } catch (error) { db.exec('ROLLBACK'); throw error; }
+    finally { db.exec('PRAGMA foreign_keys = ON'); }
+  }
+  db.exec(`CREATE TABLE IF NOT EXISTS member_reviews (
+    id TEXT PRIMARY KEY,
+    org_id TEXT NOT NULL REFERENCES orgs(id) ON DELETE CASCADE,
+    project_name TEXT NOT NULL,
+    title TEXT NOT NULL,
+    category TEXT NOT NULL DEFAULT 'asset',
+    submitted_by TEXT,
+    submitted_email TEXT NOT NULL,
+    summary TEXT,
+    status TEXT NOT NULL DEFAULT 'pending' CHECK(status IN ('pending','approved','rejected')),
+    reviewer_id TEXT,
+    reviewer_email TEXT,
+    review_note TEXT,
+    created_at INTEGER NOT NULL,
+    reviewed_at INTEGER
+  )`);
   const columns = db.prepare('PRAGMA table_info(orgs)').all().map(row => row.name);
   if (!columns.includes('status')) db.exec("ALTER TABLE orgs ADD COLUMN status TEXT NOT NULL DEFAULT 'active'");
   // 套餐：free / trial / pro / enterprise
@@ -150,6 +192,8 @@ db.exec(`
 `);
 db.exec('CREATE INDEX IF NOT EXISTS idx_task_events_task ON task_events(task_id, created_at ASC)');
 
+
+
 for (const table of ['tasks', 'documents', 'ai_calls']) {
   const columns = db.prepare(`PRAGMA table_info(${table})`).all().map(row => row.name);
   if (!columns.includes('org_id')) db.exec(`ALTER TABLE ${table} ADD COLUMN org_id TEXT NOT NULL DEFAULT 'bootstrap'`);
@@ -195,7 +239,8 @@ const insertStmt = db.prepare(`
   INSERT INTO tasks (id, type, req_key, prompt, params, status, progress, attempts, run_id, project_id, created_at, updated_at, org_id, created_by)
   VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
 `);
-const activeStmt = db.prepare("SELECT * FROM tasks WHERE status IN ('queued', 'running') ORDER BY created_at ASC LIMIT 20");
+// demo 任务不入轮询：在 SQL 层就排掉，否则常驻的 demo 行会把 LIMIT 名额占满，新任务永远推不到
+const activeStmt = db.prepare("SELECT * FROM tasks WHERE status IN ('queued', 'running') AND demo = 0 ORDER BY created_at ASC LIMIT 20");
 
 const WRITABLE = new Set([
   'status', 'progress', 'attempts', 'remote_task_id', 'result_url',
@@ -349,7 +394,7 @@ export function getTaskByRunId(runId) {
   if (userOnly()) legacyArgs.push(currentUserId());
   return toTask(db.prepare(`SELECT * FROM tasks WHERE run_id = ? AND (? IS NULL OR org_id = ?)${ownerClause}`).get(...legacyArgs));
 }
-export const activeTasks = () => activeStmt.all().filter(task => !task.demo).map(toTask);
+export const activeTasks = () => activeStmt.all().map(toTask);
 
 export function updateTask(id, patch, actorUserId = null) {
   const fields = Object.keys(patch).filter(key => WRITABLE.has(key));
@@ -540,6 +585,10 @@ export function recordAiCall({
   error = null,
   meta = null,
   costCny = 0,
+  input = null,
+  output = null,
+  toolCalls = null,
+  requestId = null,
 }) {
   const id = randomUUID();
   callInsert.run(
@@ -734,23 +783,31 @@ export function loginAccount({ email, password }) {
   const actual = Buffer.from(passwordKey(password, salt), 'hex');
   if (!timingSafeEqual(actual, Buffer.from(expected, 'hex'))) throw new Error('邮箱或密码错误');
   if (user.status === 'disabled') throw new Error('该账号已被停用，请联系平台管理员');
-  const membership = db.prepare('SELECT o.id, o.name, o.status, m.role FROM org_members m JOIN orgs o ON o.id = m.org_id WHERE m.user_id = ?').get(user.id);
+  const membership = db.prepare('SELECT o.id, o.name, o.status, o.plan, o.trial_ends_at, m.role FROM org_members m JOIN orgs o ON o.id = m.org_id WHERE m.user_id = ?').get(user.id);
   if (!membership) throw new Error('账号没有所属组织');
+  const orgStatus = effectiveOrgStatus(membership);
+  const isPlatformAdmin = config.superadminEmails.includes(user.email);
+  // 归档/停用/试用到期的组织，成员不能登录（superadmin 代管不受限）
+  if (!isPlatformAdmin && ['suspended', 'expired', 'archived'].includes(orgStatus)) {
+    const reason = { suspended: '该组织已暂停使用', expired: '该组织试用已到期', archived: '该组织已归档' }[orgStatus];
+    throw new Error(`${reason}，请联系平台管理员`);
+  }
   const token = randomBytes(32).toString('base64url');
   const now = Date.now();
   db.prepare('INSERT INTO sessions(token_hash,user_id,created_at,expires_at) VALUES (?, ?, ?, ?)').run(tokenDigest(token), user.id, now, now + 30 * 86400000);
   db.prepare('UPDATE users SET last_login_at=?, last_seen_at=? WHERE id=?').run(now, now, user.id);
-  return { token, user: { id: user.id, email: user.email }, role: config.superadminEmails.includes(user.email) ? 'superadmin' : membership.role, org: { id: membership.id, name: membership.name, status: membership.status, role: membership.role } };
+  return { token, user: { id: user.id, email: user.email }, role: isPlatformAdmin ? 'superadmin' : membership.role, org: { id: membership.id, name: membership.name, status: orgStatus, plan: membership.plan, trialEndsAt: membership.trial_ends_at || null, role: membership.role } };
 }
 
 export function getSession(token) {
   if (!token) return null;
-  const row = db.prepare(`SELECT u.id, u.email, u.status AS user_status, o.id AS org_id, o.name AS org_name, o.status AS org_status, m.role
+  const row = db.prepare(`SELECT u.id, u.email, u.status AS user_status, o.id AS org_id, o.name AS org_name, o.status AS org_status, o.plan AS org_plan, o.trial_ends_at AS org_trial_ends_at, m.role
     FROM sessions s JOIN users u ON u.id = s.user_id
     JOIN org_members m ON m.user_id = u.id JOIN orgs o ON o.id = m.org_id
     WHERE s.token_hash = ? AND s.expires_at > ?`).get(tokenDigest(token), Date.now());
   if (!row || row.user_status === 'disabled') return null;
-  return { user: { id: row.id, email: row.email }, role: config.superadminEmails.includes(row.email) ? 'superadmin' : row.role, org: { id: row.org_id, name: row.org_name, status: row.org_status, role: row.role } };
+  const orgStatus = effectiveOrgStatus({ status: row.org_status, plan: row.org_plan, trial_ends_at: row.org_trial_ends_at });
+  return { user: { id: row.id, email: row.email }, role: config.superadminEmails.includes(row.email) ? 'superadmin' : row.role, org: { id: row.org_id, name: row.org_name, status: orgStatus, plan: row.org_plan, trialEndsAt: row.org_trial_ends_at || null, role: row.role } };
 }
 
 export function platformOverview() {
@@ -781,6 +838,9 @@ export function platformOverview() {
     (SELECT COALESCE(SUM(amount),0) FROM quota_task_usage WHERE period=? AND status='settled') AS quota_used`).get(monthStart.getTime(), period, period);
   for (const org of organizations) {
     org.quota_remaining = Math.max(0, org.quota_granted - org.quota_used - org.quota_reserved);
+    // 用现算的有效状态覆盖库里的值，保证 trial 到期立即体现
+    org.stored_status = org.status;
+    org.status = effectiveOrgStatus(org);
   }
   const auditLogs = db.prepare(`SELECT l.id, l.action, l.target, l.details, l.created_at, u.email AS actor_email,
       o.name AS org_name, o.id AS org_id
@@ -837,6 +897,91 @@ export function platformTrend(range = 'week') {
   return series;
 }
 
+/**
+ * 运营看板（superadmin）。全部基于现有真实数据，不造假：
+ * - 活性：近 N 天有任务/创作行为的组织与用户
+ * - 留存：周/月活跃留存曲线
+ * - 套餐：分布与 trial→paid 转化
+ * - 消耗：按天真实成本 trend
+ */
+export function platformMetrics({ days = 30 } = {}) {
+  const span = Math.max(7, Math.min(180, Number(days) || 30));
+  const now = Date.now();
+  const from = now - span * 86400000;
+  const dayOf = "strftime('%Y-%m-%d', created_at/1000, 'unixepoch', 'localtime')";
+
+  const liveOrgs = db.prepare('SELECT COUNT(*) AS n FROM orgs WHERE id != ? AND status = ?').get('bootstrap', 'active').n || 0;
+  const allOrgs = db.prepare('SELECT COUNT(*) AS n FROM orgs WHERE id != ?').get('bootstrap').n || 0;
+
+  // 活跃组织：期间内产生过任务或创作文档
+  const activeOrgRow = db.prepare(`SELECT COUNT(DISTINCT org_id) AS n FROM (
+    SELECT org_id FROM tasks WHERE created_at >= ?
+    UNION SELECT org_id FROM documents WHERE created_at >= ?
+  ) WHERE org_id != ?`).get(from, from, 'bootstrap');
+  const activeOrgs = activeOrgRow.n || 0;
+
+  // 活跃用户：期间内有任务或登录过
+  const activeUsers = db.prepare(`SELECT COUNT(DISTINCT user_id) AS n FROM (
+    SELECT created_by AS user_id FROM tasks WHERE created_at >= ? AND created_by IS NOT NULL
+    UNION SELECT user_id FROM sessions WHERE created_at >= ?
+  )`).get(from, from).n || 0;
+  const totalUsers = db.prepare('SELECT COUNT(*) AS n FROM users').get().n || 0;
+
+  // 套餐分布
+  const planRows = db.prepare('SELECT plan, COUNT(*) AS n FROM orgs WHERE id != ? GROUP BY plan').all('bootstrap');
+  const planMap = Object.fromEntries(planRows.map(row => [row.plan, row.n]));
+  const plans = ORG_PLANS.map(plan => ({ plan, count: planMap[plan] || 0 }));
+  const paid = (planMap.pro || 0) + (planMap.enterprise || 0);
+  const payingOrgs = paid;
+  // 转化率：付费组织 / 非免费组织（排除 free 与 bootstrap）
+  const monetizable = allOrgs - (planMap.free || 0);
+  const conversion = monetizable > 0 ? paid / monetizable : 0;
+  const arpu = payingOrgs > 0
+    ? Number((db.prepare(`SELECT COALESCE(SUM(cost_cny),0) AS c FROM ai_calls WHERE created_at >= ?`).get(from).c / payingOrgs).toFixed(2))
+    : 0;
+
+  // 每日：活跃组织、任务量、成本
+  const taskDaily = new Map(db.prepare(`SELECT ${dayOf} AS day, COUNT(*) AS tasks, COUNT(DISTINCT org_id) AS orgs
+    FROM tasks WHERE created_at >= ? GROUP BY day`).all(from).map(row => [row.day, row]));
+  const costDaily = new Map(db.prepare(`SELECT ${dayOf} AS day, COALESCE(SUM(cost_cny),0) AS cost
+    FROM ai_calls WHERE created_at >= ? GROUP BY day`).all(from).map(row => [row.day, Number(row.cost)]));
+  const series = [];
+  const start = new Date(from);
+  start.setHours(0, 0, 0, 0);
+  for (let i = 0; i <= span; i += 1) {
+    const date = new Date(start.getTime() + i * 86400000);
+    const key = `${date.getFullYear()}-${`${date.getMonth() + 1}`.padStart(2, '0')}-${`${date.getDate()}`.padStart(2, '0')}`;
+    const task = taskDaily.get(key);
+    series.push({
+      date: key,
+      tasks: task?.tasks || 0,
+      activeOrgs: task?.orgs || 0,
+      cost: Number((costDaily.get(key) || 0).toFixed(2)),
+    });
+  }
+
+  // 周活跃留存：最近 8 周，每周有行为的组织数
+  const weekly = [];
+  for (let w = 7; w >= 0; w -= 1) {
+    const end = now - w * 7 * 86400000;
+    const begin = end - 7 * 86400000;
+    const orgs = db.prepare(`SELECT COUNT(DISTINCT org_id) AS n FROM tasks WHERE created_at >= ? AND created_at < ?`).get(begin, end).n || 0;
+    const tasks = db.prepare('SELECT COUNT(*) AS n FROM tasks WHERE created_at >= ? AND created_at < ?').get(begin, end).n || 0;
+    weekly.push({ week: `W-${w}`, orgs, tasks });
+  }
+
+  return {
+    days: span,
+    orgs: { total: allOrgs, active: liveOrgs, activeInRange: activeOrgs, activeRate: allOrgs > 0 ? activeOrgs / allOrgs : 0 },
+    users: { total: totalUsers, activeInRange: activeUsers, activeRate: totalUsers > 0 ? activeUsers / totalUsers : 0 },
+    plans,
+    conversion,
+    payingOrgs,
+    arpu,
+    series,
+    weekly,
+  };
+}
 export function deleteSession(token) {
   if (token) db.prepare('DELETE FROM sessions WHERE token_hash = ?').run(tokenDigest(token));
 }
@@ -866,13 +1011,59 @@ export function createOrganization({ name, adminEmail, actorUserId }) {
   } catch (error) { db.exec('ROLLBACK'); throw error; }
 }
 
+export const ORG_STATUSES = ['active', 'suspended', 'expired', 'archived'];
+/** 这些状态下组织被冻结：成员不能登录也不能调业务接口（superadmin 除外） */
+export const LOCKED_ORG_STATUSES = ['suspended', 'expired', 'archived'];
+
+/**
+ * 计算组织的「有效状态」。
+ *
+ * 库里存的是 status 字段，但 trial 到期属于「时间驱动的状态」：
+ * 不依赖定时任务把库改掉，而是每次读的时候按 trial_ends_at 现算，
+ * 这样即使清理任务没跑，到期组织也不会漏网。
+ *
+ * 只对 plan='trial' 生效；管理员手动归档/停用优先。
+ */
+export function effectiveOrgStatus({ status, plan, trial_ends_at: trialEndsAt }) {
+  if (status !== 'active') return status;
+  if (plan === 'trial' && trialEndsAt && Number(trialEndsAt) <= Date.now()) return 'expired';
+  return 'active';
+}
+
+/**
+ * 把已到期但库里还是 active 的 trial 组织落库成 expired，并记审计。
+ * 幂等，可以反复调；由 poller 定时触发。
+ */
+export function expireDueTrials() {
+  const due = db.prepare("SELECT id, name, plan, status, trial_ends_at FROM orgs WHERE id != 'bootstrap' AND status = 'active' AND plan = 'trial' AND trial_ends_at IS NOT NULL AND trial_ends_at <= ?")
+    .all(Date.now());
+  if (!due.length) return [];
+  db.exec('BEGIN IMMEDIATE');
+  try {
+    for (const org of due) {
+      db.prepare("UPDATE orgs SET status='expired' WHERE id=?").run(org.id);
+      recordOrgAudit({ orgId: org.id, actorUserId: null, action: 'organization.trial_expired', target: org.name, details: { trialEndsAt: org.trial_ends_at } });
+    }
+    db.exec('COMMIT');
+    return due.map(org => org.id);
+  } catch (error) { db.exec('ROLLBACK'); throw error; }
+}
+
 export function setOrganizationStatus({ orgId, actorUserId, status }) {
-  if (!['active', 'suspended'].includes(status)) throw new Error('组织状态无效');
-  const org = db.prepare("SELECT name,status FROM orgs WHERE id=? AND id!='bootstrap'").get(orgId);
+  if (!ORG_STATUSES.includes(status)) throw new Error(`组织状态无效（可选：${ORG_STATUSES.join(' / ')}）`);
+  const org = db.prepare("SELECT name,status,plan,trial_ends_at FROM orgs WHERE id=? AND id!='bootstrap'").get(orgId);
   if (!org) return null;
+  const from = effectiveOrgStatus(org);
   db.prepare('UPDATE orgs SET status=? WHERE id=?').run(status, orgId);
-  if (org.status !== status) recordOrgAudit({ orgId, actorUserId, action: 'organization.status_changed', target: org.name, details: { from: org.status, to: status } });
-  return { id: orgId, name: org.name, status };
+  // 归档/停用立即剔除全部成员会话，避免已登录的人继续操作；
+  // 但 superadmin 保留会话，否则 "代管者刚好属于该组织" 时将无法恢复
+  if (LOCKED_ORG_STATUSES.includes(status)) {
+    const superadminEmails = config.superadminEmails;
+    const keepClause = superadminEmails.length ? ` AND user_id NOT IN (SELECT id FROM users WHERE lower(email) IN (${superadminEmails.map(() => '?').join(',')}))` : '';
+    db.prepare(`DELETE FROM sessions WHERE user_id IN (SELECT user_id FROM org_members WHERE org_id=?${keepClause})`).run(orgId, ...(superadminEmails.length ? superadminEmails : []));
+  }
+  if (from !== status) recordOrgAudit({ orgId, actorUserId, action: 'organization.status_changed', target: org.name, details: { from, to: status } });
+  return { id: orgId, name: org.name, status, previousStatus: from };
 }
 
 export function setOrganizationAdmin({ orgId, actorUserId, email }) {
@@ -894,7 +1085,7 @@ export function listOrgInvites(orgId) {
 export function createOrgInvite({ orgId, actorUserId, email, role }) {
   const normalizedEmail = String(email || '').trim().toLowerCase();
   if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(normalizedEmail) || normalizedEmail.length > 254) throw new Error('请输入有效邮箱');
-  if (!['org.admin', 'org.user'].includes(role)) throw new Error('成员角色无效');
+  if (!['org.admin', 'org.reviewer', 'org.user'].includes(role)) throw new Error('成员角色无效');
   if (db.prepare('SELECT 1 FROM users WHERE email=?').get(normalizedEmail)) throw new Error('该邮箱已注册，MVP 暂不支持跨组织加入');
   return withSavepoint(() => {
     const id = randomUUID();
@@ -955,7 +1146,7 @@ export function acceptOrgInvite({ token, email, password }) {
 }
 
 export function changeOrgMemberRole({ orgId, actorUserId, userId, role }) {
-  if (!['org.admin', 'org.user'].includes(role)) throw new Error('成员角色无效');
+  if (!['org.admin', 'org.reviewer', 'org.user'].includes(role)) throw new Error('成员角色无效');
   db.exec('BEGIN IMMEDIATE');
   try {
     const current = db.prepare('SELECT u.email,m.role FROM org_members m JOIN users u ON u.id=m.user_id WHERE m.org_id=? AND m.user_id=?').get(orgId, userId);
@@ -987,10 +1178,67 @@ export function recordOrgAudit({ orgId, actorUserId = null, action, target = nul
   db.prepare('INSERT INTO org_audit_logs VALUES(?,?,?,?,?,?,?)').run(randomUUID(), orgId, actorUserId, action, target, details ? JSON.stringify(details) : null, Date.now());
 }
 
-export function listOrgAudit(orgId, limit = 100) {
-  return db.prepare(`SELECT a.id,a.action,a.target,a.details,a.created_at AS createdAt,u.email AS actorEmail
-    FROM org_audit_logs a LEFT JOIN users u ON u.id=a.actor_user_id WHERE a.org_id=?
-    ORDER BY a.created_at DESC LIMIT ?`).all(orgId, limit).map(row => ({ ...row, details: row.details ? JSON.parse(row.details) : null }));
+/**
+ * 已支持的审计动作（前端筛选下拉用）。列在这里的才能被筛选，
+ * 未列出的动作仍会在列表里出现，可用 q 模糊搜。
+ */
+export const ORG_AUDIT_ACTIONS = [
+  'organization.status_changed', 'organization.trial_expired', 'organization.renamed',
+  'org.plan.changed', 'member.role_changed', 'member.removed',
+  'invite.created', 'invite.resent', 'invite.revoked', 'invite.accepted',
+  'quota.org.granted', 'quota.member.allocated',
+  'user.disabled', 'user.enabled', 'user.sessions_revoked',
+  'review.submitted', 'review.approved', 'review.rejected',
+];
+
+/**
+ * 组织审计查询：支持按动作 / 操作人 / 时间范围 / 关键字筛选，offset 分页。
+ * 返回 items + total + 可用动作列表，前端可直接渲染筛选器。
+ * allOrgs=true 时跨组织查询（superadmin）。
+ */
+export function listOrgAudit(orgId, {
+  limit = 50, offset = 0, action, actor, from, to, q, allOrgs = false,
+} = {}) {
+  const clauses = [];
+  const values = [];
+  if (!allOrgs) { clauses.push('a.org_id = ?'); values.push(orgId); }
+  if (action) { clauses.push('a.action = ?'); values.push(action); }
+  if (actor) { clauses.push('lower(u.email) LIKE ?'); values.push(`%${String(actor).toLowerCase()}%`); }
+  if (Number.isFinite(from)) { clauses.push('a.created_at >= ?'); values.push(from); }
+  if (Number.isFinite(to)) { clauses.push('a.created_at <= ?'); values.push(to); }
+  if (q) {
+    clauses.push('(lower(a.target) LIKE ? OR lower(a.action) LIKE ? OR lower(u.email) LIKE ?)');
+    const like = `%${String(q).toLowerCase()}%`;
+    values.push(like, like, like);
+  }
+  const where = clauses.length ? `WHERE ${clauses.join(' AND ')}` : '';
+  const size = Math.max(1, Math.min(200, Number(limit) || 50));
+  const skip = Math.max(0, Number(offset) || 0);
+  const items = db.prepare(`SELECT a.id,a.action,a.target,a.details,a.created_at AS createdAt,
+      u.email AS actorEmail,o.name AS orgName
+    FROM org_audit_logs a
+    LEFT JOIN users u ON u.id=a.actor_user_id
+    LEFT JOIN orgs o ON o.id=a.org_id
+    ${where} ORDER BY a.created_at DESC LIMIT ? OFFSET ?`)
+    .all(...values, size, skip)
+    .map(row => ({ ...row, details: row.details ? JSON.parse(row.details) : null }));
+  const total = db.prepare(`SELECT COUNT(*) AS n FROM org_audit_logs a LEFT JOIN users u ON u.id=a.actor_user_id ${where}`)
+    .get(...values).n || 0;
+  return { items, total, limit: size, offset: skip, actions: ORG_AUDIT_ACTIONS };
+}
+
+/** 审计留存清理：删除超过保留期的记录；返回删除条数 */
+export function purgeExpiredAudit(retentionDays = 180) {
+  const days = Number(retentionDays);
+  if (!Number.isFinite(days) || days <= 0) return 0;
+  const cutoff = Date.now() - days * 86400000;
+  const result = db.prepare('DELETE FROM org_audit_logs WHERE created_at < ?').run(cutoff);
+  return Number(result.changes || 0);
+}
+
+/** 审计导出：不导全文，只导可对账字段；上限 5000 条防内存爆 */
+export function exportOrgAudit(orgId, { action, actor, from, to, q, allOrgs = false } = {}) {
+  return listOrgAudit(orgId, { limit: 5000, offset: 0, action, actor, from, to, q, allOrgs }).items;
 }
 
 export function getOrgQuota(orgId) {
@@ -1034,12 +1282,19 @@ export const ORG_PLANS = ['free', 'trial', 'pro', 'enterprise'];
 
 export function setOrgPlan({ orgId, plan, actorUserId }) {
   if (!ORG_PLANS.includes(plan)) throw new Error(`套餐必须是 ${ORG_PLANS.join(' / ')} 之一`);
-  const org = db.prepare("SELECT id, plan FROM orgs WHERE id=? AND id!='bootstrap'").get(orgId);
+  const org = db.prepare("SELECT id, plan, status, trial_ends_at FROM orgs WHERE id=? AND id!='bootstrap'").get(orgId);
   if (!org) return null;
+  // 新开的 trial 从当前时间重新计时 30 天；非 trial 清空到期时间
   const trialEndsAt = plan === 'trial' ? Date.now() + 30 * 86400000 : null;
+  // 升级/转正式套餐时，把因试用到期而冻结的组织自动解冻（仅 expired，不动 suspended/archived）
+  const unfreeze = plan !== 'trial' && effectiveOrgStatus(org) === 'expired';
   db.exec('BEGIN IMMEDIATE');
   try {
     db.prepare('UPDATE orgs SET plan=?, trial_ends_at=? WHERE id=?').run(plan, trialEndsAt, orgId);
+    if (unfreeze) {
+      db.prepare("UPDATE orgs SET status='active' WHERE id=?").run(orgId);
+      recordOrgAudit({ orgId, actorUserId, action: 'organization.status_changed', target: orgId, details: { from: 'expired', to: 'active', reason: `套餐改为 ${plan}` } });
+    }
     recordOrgAudit({ orgId, actorUserId, action: 'org.plan.changed', target: orgId, details: { from: org.plan, to: plan } });
     db.exec('COMMIT');
   } catch (error) { db.exec('ROLLBACK'); throw error; }
@@ -1081,6 +1336,158 @@ export function setMemberQuota({ orgId, userId, amount, actorUserId }) {
   return getOrgQuota(orgId);
 }
 
+/**
+ * 批量分配成员额度：一次事务写入，任一失败全部回滚。
+ * items: [{ userId, amount }]
+ */
+export function setMemberQuotaBatch({ orgId, items, actorUserId }) {
+  if (!Array.isArray(items) || !items.length) throw new Error('请至少选择一个成员');
+  const period = quotaPeriod();
+  db.exec('BEGIN IMMEDIATE');
+  try {
+    const summary = getOrgQuota(orgId);
+    // 候选上限动态变化：按顺序模拟分配，避免「合计超出剩余额度」却只部分成功
+    let remaining = summary.remaining;
+    const planned = summary.members.map(item => ({ ...item }));
+    const results = [];
+    for (const entry of items) {
+      const amount = Number(entry?.amount);
+      if (!Number.isSafeInteger(amount) || amount < 0 || amount > 1000000000) throw new Error(`成员 ${entry?.userId || ''} 的额度无效`);
+      const member = planned.find(item => item.id === entry.userId);
+      if (!member) throw new Error(`成员不存在：${entry.userId}`);
+      const othersAvailable = planned.filter(item => item.id !== member.id).reduce((sum, item) => sum + item.available, 0);
+      const minimum = member.used + member.reserved;
+      const maximum = Math.max(minimum, minimum + remaining - othersAvailable);
+      if (amount < minimum) throw new Error(`${member.email} 的额度不能低于已用和预占（${minimum} 点）`);
+      if (amount > maximum) throw new Error(`${member.email} 最多可分配 ${maximum} 点`);
+      // 释放该成员原先占用的可用额，再计新的
+      remaining += member.available;
+      member.allocation = amount;
+      member.available = Math.max(0, amount - member.used - member.reserved);
+      remaining -= member.available;
+      results.push({ member, from: summary.members.find(item => item.id === member.id).allocation, to: amount });
+    }
+    const stmt = db.prepare(`INSERT INTO member_quota_allocations(org_id,user_id,period,amount,actor_user_id,updated_at) VALUES(?,?,?,?,?,?)
+      ON CONFLICT(org_id,user_id,period) DO UPDATE SET amount=excluded.amount,actor_user_id=excluded.actor_user_id,updated_at=excluded.updated_at`);
+    for (const { member, from, to } of results) {
+      stmt.run(orgId, member.id, period, to, actorUserId, Date.now());
+      recordOrgAudit({ orgId, actorUserId, action: 'quota.member.allocated', target: member.email, details: { period, from, to, batch: true } });
+    }
+    db.exec('COMMIT');
+  } catch (error) { db.exec('ROLLBACK'); throw error; }
+  return getOrgQuota(orgId);
+}
+
+/** 清零成员本月额度分配（仍保留已用/预占，不能清到低于已用） */
+export function clearMemberQuota({ orgId, userId, actorUserId }) {
+  const summary = getOrgQuota(orgId);
+  const member = summary.members.find(item => item.id === userId);
+  if (!member) throw new Error('成员不存在');
+  if (member.used + member.reserved > 0) {
+    throw new Error(`该成员本月已用 ${member.used} 点、预占 ${member.reserved} 点，不能直接清零`);
+  }
+  return setMemberQuota({ orgId, userId, amount: 0, actorUserId });
+}
+
+/**
+ * 回收组织本月额度：写入一条负数不了——额度表 amount 有 CHECK(amount>0)，
+ * 所以回收用「撤销划拨记录」实现：删除最近一条划拨，相当于减少总额。
+ * 不能低于已用+预占。
+ */
+export function revokeOrgQuota({ orgId, amount, actorUserId }) {
+  if (!Number.isSafeInteger(amount) || amount <= 0) throw new Error('回收额度必须是正整数点数');
+  const period = quotaPeriod();
+  db.exec('BEGIN IMMEDIATE');
+  try {
+    const state = orgQuotaState(orgId, period);
+    const available = state.granted - state.used - state.reserved;
+    if (amount > available) throw new Error(`组织当前最多可回收 ${Math.max(0, available)} 点（已用与预占不可回收）`);
+    // 从最新划拨记录往前扣，必要时拆分一条记录
+    let left = amount;
+    const grants = db.prepare('SELECT id,amount FROM org_quota_grants WHERE org_id=? AND period=? ORDER BY created_at DESC').all(orgId, period);
+    for (const grant of grants) {
+      if (left <= 0) break;
+      if (grant.amount <= left) {
+        db.prepare('DELETE FROM org_quota_grants WHERE id=?').run(grant.id);
+        left -= grant.amount;
+      } else {
+        db.prepare('UPDATE org_quota_grants SET amount=amount-? WHERE id=?').run(left, grant.id);
+        left = 0;
+      }
+    }
+    recordOrgAudit({ orgId, actorUserId, action: 'quota.org.revoked', target: orgId, details: { period, amount } });
+    db.exec('COMMIT');
+  } catch (error) { db.exec('ROLLBACK'); throw error; }
+  return getOrgQuota(orgId);
+}
+
+/* ===== 额度对账明细 / 导出 / 预警 ===== */
+
+/** 额度使用明细：可选按 org / user / period / status 筛选，offset 分页 */
+export function listQuotaUsage({
+  orgId, userId, period, status, limit = 50, offset = 0, allOrgs = false,
+} = {}) {
+  const clauses = [];
+  const values = [];
+  if (!allOrgs) { clauses.push('q.org_id = ?'); values.push(orgId); }
+  if (userId) { clauses.push('q.user_id = ?'); values.push(userId); }
+  if (period) { clauses.push('q.period = ?'); values.push(period); }
+  if (status) { clauses.push('q.status = ?'); values.push(status); }
+  const where = clauses.length ? `WHERE ${clauses.join(' AND ')}` : '';
+  const size = Math.max(1, Math.min(500, Number(limit) || 50));
+  const skip = Math.max(0, Number(offset) || 0);
+  const rows = db.prepare(`SELECT q.task_id AS taskId,q.org_id AS orgId,o.name AS orgName,
+      q.user_id AS userId,u.email AS userEmail,q.period,q.amount,q.status,q.cost_cny AS costCny,
+      q.created_at AS createdAt,q.settled_at AS settledAt
+    FROM quota_task_usage q
+    LEFT JOIN users u ON u.id=q.user_id
+    LEFT JOIN orgs o ON o.id=q.org_id
+    ${where} ORDER BY q.created_at DESC LIMIT ? OFFSET ?`).all(...values, size, skip);
+  const total = db.prepare(`SELECT COUNT(*) AS n FROM quota_task_usage q ${where}`).get(...values).n || 0;
+  return { items: rows.map(row => ({ ...row, costCny: Number(Number(row.costCny || 0).toFixed(4)) })), total, limit: size, offset: skip };
+}
+
+/** 额度预警：按剩余比例算出预警级别（warn ≤ 15%，critical ≤ 5%，empty 0） */
+export function quotaAlerts(orgId, thresholds = { warn: 0.15, critical: 0.05 }) {
+  const summary = getOrgQuota(orgId);
+  const ratio = summary.granted > 0 ? summary.remaining / summary.granted : (summary.used + summary.reserved > 0 ? 0 : 1);
+  let level = 'ok';
+  if (summary.remaining <= 0 && (summary.used + summary.reserved) > 0) level = 'empty';
+  else if (ratio <= thresholds.critical) level = 'critical';
+  else if (ratio <= thresholds.warn) level = 'warn';
+  const memberAlerts = summary.members
+    .filter(member => member.allocation > 0)
+    .map(member => {
+      const memberRatio = member.allocation > 0 ? member.available / member.allocation : 1;
+      let memberLevel = 'ok';
+      if (member.available <= 0) memberLevel = 'empty';
+      else if (memberRatio <= thresholds.critical) memberLevel = 'critical';
+      else if (memberRatio <= thresholds.warn) memberLevel = 'warn';
+      return { email: member.email, allocation: member.allocation, available: member.available, ratio: memberRatio, level: memberLevel };
+    })
+    .filter(item => item.level !== 'ok');
+  return {
+    period: summary.period,
+    granted: summary.granted,
+    used: summary.used,
+    reserved: summary.reserved,
+    remaining: summary.remaining,
+    ratio,
+    level,
+    thresholds,
+    members: memberAlerts,
+  };
+}
+
+/** 平台级额度预警汇总：返回所有低于阈值的组织 */
+export function platformQuotaAlerts(thresholds = { warn: 0.15, critical: 0.05 }) {
+  const orgs = db.prepare("SELECT id,name,status FROM orgs WHERE id!='bootstrap'").all();
+  const alerts = orgs.map(org => ({ ...org, ...quotaAlerts(org.id, thresholds) }))
+    .filter(item => item.level !== 'ok')
+    .sort((a, b) => a.ratio - b.ratio);
+  return alerts;
+}
+
 /* ===== 平台用户目录（superadmin） ===== */
 
 const isSuperadminEmail = email => config.superadminEmails.includes(String(email || '').toLowerCase());
@@ -1101,23 +1508,44 @@ const platformUserRow = row => ({
 });
 
 /**
- * 跨组织用户列表。role 可以是 superadmin / org.admin / org.user。
+ * 跨组织用户列表。role 可以是 superadmin / org.admin / org.reviewer / org.user。
+ * 服务端真分页：role 过滤也下推 SQL（全量后再 JS 过滤会导致分页数量对不上）。
  */
-export function listPlatformUsers({ role, status, orgId, query, limit = 500 } = {}) {
+export function listPlatformUsers({ role, status, orgId, query, limit = 50, offset = 0 } = {}) {
   const clauses = [];
   const values = [];
   if (orgId) { clauses.push('o.id = ?'); values.push(orgId); }
   if (status === 'active') clauses.push("u.status != 'disabled'");
   if (status === 'disabled') clauses.push("u.status = 'disabled'");
-  if (query) { clauses.push('(lower(u.email) LIKE ? OR lower(o.name) LIKE ?)'); values.push(`%${String(query).toLowerCase()}%`, `%${String(query).toLowerCase()}%`); }
+  if (query) {
+    clauses.push('(lower(u.email) LIKE ? OR lower(o.name) LIKE ?)');
+    const like = `%${String(query).toLowerCase()}%`;
+    values.push(like, like);
+  }
+  // superadmin 由环境变量决定，不在库里：用邮箱白名单下推，避免取全表再筛
+  if (role === 'superadmin') {
+    const emails = config.superadminEmails;
+    if (!emails.length) {
+      const size = Math.max(1, Math.min(500, Number(limit) || 50));
+      return { items: [], total: 0, limit: size, offset: Math.max(0, Number(offset) || 0) };
+    }
+    clauses.push(`lower(u.email) IN (${emails.map(() => '?').join(',')})`);
+    values.push(...emails);
+  } else if (role) {
+    clauses.push('m.role = ?');
+    values.push(role);
+  }
   const where = clauses.length ? `WHERE ${clauses.join(' AND ')}` : '';
+  const size = Math.max(1, Math.min(500, Number(limit) || 50));
+  const skip = Math.max(0, Number(offset) || 0);
   const rows = db.prepare(`SELECT u.id,u.email,u.status,u.created_at,u.last_login_at,u.last_seen_at,
     m.role,o.id AS org_id,o.name AS org_name,o.status AS org_status,
     (SELECT COUNT(*) FROM tasks t WHERE t.created_by=u.id) AS task_count
     FROM users u JOIN org_members m ON m.user_id=u.id JOIN orgs o ON o.id=m.org_id
-    ${where} ORDER BY u.created_at DESC LIMIT ?`).all(...values, Math.max(1, Math.min(2000, limit)));
-  const items = rows.map(platformUserRow);
-  return role ? items.filter(user => user.role === role) : items;
+    ${where} ORDER BY u.created_at DESC LIMIT ? OFFSET ?`).all(...values, size, skip);
+  const total = db.prepare(`SELECT COUNT(*) AS n FROM users u JOIN org_members m ON m.user_id=u.id JOIN orgs o ON o.id=m.org_id ${where}`)
+    .get(...values).n || 0;
+  return { items: rows.map(platformUserRow), total, limit: size, offset: skip };
 }
 
 export function platformUserTotals() {
@@ -1126,12 +1554,15 @@ export function platformUserTotals() {
     (SELECT COUNT(*) FROM users WHERE status='disabled') AS disabled,
     (SELECT COUNT(*) FROM org_members WHERE role='org.admin') AS org_admins,
     (SELECT COUNT(*) FROM orgs WHERE id!='bootstrap') AS organizations`).get();
-  const all = listPlatformUsers({ limit: 2000 });
+  const emails = config.superadminEmails;
+  const superadmins = emails.length
+    ? db.prepare(`SELECT COUNT(*) AS n FROM users WHERE lower(email) IN (${emails.map(() => '?').join(',')})`).get(...emails).n || 0
+    : 0;
   return {
     users: row.users || 0,
     disabled: row.disabled || 0,
     orgAdmins: row.org_admins || 0,
-    superadmins: all.filter(user => user.role === 'superadmin').length,
+    superadmins,
     organizations: row.organizations || 0,
   };
 }
@@ -1244,4 +1675,105 @@ export function canAccessFile(path, orgId, userId = currentUserId(), role = curr
   if (role === 'org.user') args.push(userId);
   return Boolean(db.prepare(`SELECT 1 FROM file_owners WHERE path = ? AND org_id = ?${ownerFilter}
     UNION SELECT 1 FROM tasks WHERE local_path = ? AND org_id = ?${ownerFilter} LIMIT 1`).get(...args));
+}
+
+/* ===== 成员提交内容审核队列 ===== */
+
+function seedReviewsForOrg(orgId) {
+  if (!orgId) return;
+  const count = db.prepare('SELECT COUNT(*) AS n FROM member_reviews WHERE org_id=?').get(orgId).n;
+  if (count > 0) return;
+  const member = db.prepare(`
+    SELECT u.id, u.email FROM org_members m JOIN users u ON u.id = m.user_id
+    WHERE m.org_id=? AND m.role='org.user' ORDER BY m.created_at LIMIT 1
+  `).get(orgId);
+  const submitterId = member?.id || null;
+  const submitterEmail = member?.email || 'member@huimeng.demo';
+  const now = Date.now();
+  const samples = [
+    ['《雨巷迷踪》第1季', '林知夏 · 雨夜定妆三视图', 'asset', '已完成暗调光影重绘，锁定金丝边眼镜与风衣细节，申请入库。', 'pending', now - 25 * 60000],
+    ['《雨巷迷踪》第1季', 'EP01 镜头 03 · 怀表特写成片', 'video', '5s 高清视频已生成（Seedance 1.5 Pro），冷暖对比与雨滴反射已校准。', 'pending', now - 90 * 60000],
+    ['《济世堂秘闻》先导片', '药铺内景 · 烛火氛围图', 'asset', '古风木质药柜与青烟光束构图，等待审核确认风格一致性。', 'pending', now - 3 * 3600000],
+    ['《长夜将明》第1季', 'EP01 分镜剧本 · 停电的夜', 'script', '完成 3 场 14 镜拆解与动捕动作标记，提交审核锁版。', 'approved', now - 24 * 3600000],
+  ];
+  const stmt = db.prepare(`INSERT INTO member_reviews
+    (id, org_id, project_name, title, category, submitted_by, submitted_email, summary, status, reviewer_id, reviewer_email, review_note, created_at, reviewed_at)
+    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`);
+  for (const [projectName, title, category, summary, status, createdAt] of samples) {
+    stmt.run(
+      randomUUID(), orgId, projectName, title, category, submitterId, submitterEmail, summary, status,
+      null, status === 'approved' ? 'system@huimeng.demo' : null,
+      status === 'approved' ? '分镜结构清晰，准予进入资产阶段' : null,
+      createdAt, status === 'approved' ? createdAt + 1800000 : null
+    );
+  }
+}
+
+export function listMemberReviews({ orgId, status = 'all', allOrgs = false } = {}) {
+  if (!allOrgs && orgId) seedReviewsForOrg(orgId);
+  const where = [];
+  const args = [];
+  if (!allOrgs && orgId) {
+    where.push('r.org_id = ?');
+    args.push(orgId);
+  }
+  if (status && status !== 'all') {
+    where.push('r.status = ?');
+    args.push(status);
+  }
+  const clause = where.length ? `WHERE ${where.join(' AND ')}` : '';
+  const items = db.prepare(`
+    SELECT r.*, o.name AS org_name
+    FROM member_reviews r
+    LEFT JOIN orgs o ON o.id = r.org_id
+    ${clause}
+    ORDER BY CASE r.status WHEN 'pending' THEN 0 ELSE 1 END, r.created_at DESC
+    LIMIT 100
+  `).all(...args);
+  const countClause = !allOrgs && orgId ? 'WHERE org_id = ?' : '';
+  const countArgs = !allOrgs && orgId ? [orgId] : [];
+  const counts = db.prepare(`
+    SELECT
+      COUNT(*) AS total,
+      SUM(CASE WHEN status='pending' THEN 1 ELSE 0 END) AS pending,
+      SUM(CASE WHEN status='approved' THEN 1 ELSE 0 END) AS approved,
+      SUM(CASE WHEN status='rejected' THEN 1 ELSE 0 END) AS rejected
+    FROM member_reviews ${countClause}
+  `).get(...countArgs);
+  return { items, counts };
+}
+
+export function createMemberReview({ orgId, projectName, title, category = 'asset', summary = '', actorUserId, actorEmail }) {
+  const cleanTitle = String(title || '').trim();
+  if (!cleanTitle) throw new Error('请填写审核标题');
+  const id = randomUUID();
+  const now = Date.now();
+  db.prepare(`INSERT INTO member_reviews
+    (id, org_id, project_name, title, category, submitted_by, submitted_email, summary, status, created_at)
+    VALUES (?, ?, ?, ?, ?, ?, ?, ?, 'pending', ?)`)
+    .run(id, orgId, String(projectName || '未命名项目').trim(), cleanTitle, category, actorUserId || null, actorEmail || '', String(summary || '').trim(), now);
+  recordOrgAudit({ orgId, actorUserId, action: 'review.submitted', target: cleanTitle, details: { category } });
+  return db.prepare('SELECT * FROM member_reviews WHERE id=?').get(id);
+}
+
+export function decideMemberReview({ id, orgId, allOrgs = false, action, note = '', actorUserId, actorEmail }) {
+  if (!['approve', 'reject'].includes(action)) throw new Error('审核动作无效');
+  const row = allOrgs
+    ? db.prepare('SELECT * FROM member_reviews WHERE id=?').get(id)
+    : db.prepare('SELECT * FROM member_reviews WHERE id=? AND org_id=?').get(id, orgId);
+  if (!row) return null;
+  const nextStatus = action === 'approve' ? 'approved' : 'rejected';
+  const now = Date.now();
+  db.prepare(`UPDATE member_reviews
+    SET status=?, reviewer_id=?, reviewer_email=?, review_note=?, reviewed_at=?
+    WHERE id=?`)
+    .run(nextStatus, actorUserId || null, actorEmail || '', String(note || '').trim() || null, now, id);
+  recordOrgAudit({
+    orgId: row.org_id,
+    actorUserId,
+    action: action === 'approve' ? 'review.approved' : 'review.rejected',
+    target: row.title,
+    details: { note: String(note || '').trim() || undefined },
+  });
+  return db.prepare('SELECT r.*, o.name AS org_name FROM member_reviews r LEFT JOIN orgs o ON o.id = r.org_id WHERE r.id=?').get(id);
 }

@@ -3,12 +3,22 @@ import { Bell, Check, ChevronRight, FolderKanban, Gift, LogOut, PlaySquare, Plus
 import { api } from '../api.js';
 import './TopbarActions.css';
 
+// 通知中心：演示数据。点开条目会跳转并标记为已读。
+const DEMO_NOTICES = [
+  { id: 'n1', title: '「第 2 集 · 旧照片特写」已生成', meta: '2 分钟前 · 点击去成片查看', tab: '成片', read: false },
+  { id: 'n2', title: '组长驳回了「林知夏」的资产修改', meta: '18 分钟前 · 需要重新提交', tab: '资产', read: false },
+  { id: 'n3', title: '本月额度已用 62%，请注意', meta: '32 分钟前 · 额度不足会暂停出片', tab: '管理', read: false },
+  { id: 'n4', title: '本周生产报表已生成', meta: '1 小时前 · 平均耗时下降 12%', tab: '数据', read: true },
+  { id: 'n5', title: '「雨巷迷踪」分镜拆解完成', meta: '3 小时前 · 共 14 个分镜待确认', tab: '拆解', read: true },
+];
+
 export default function TopbarActions({ onNavigate, onCreateMode, onLogin, onLogout, showLogin, session }) {
   const [open, setOpen] = useState(null);
   const [stats, setStats] = useState(null);
   const [quota, setQuota] = useState(null);
   const [statsError, setStatsError] = useState('');
-  const [unread, setUnread] = useState(3);
+  const [notices, setNotices] = useState(DEMO_NOTICES);
+  const unread = notices.filter(item => !item.read).length;
   const [toast, setToast] = useState('');
   const wrapRef = useRef(null);
   const timerRef = useRef(null);
@@ -51,7 +61,7 @@ export default function TopbarActions({ onNavigate, onCreateMode, onLogin, onLog
 
   const toggle = key => setOpen(current => (current === key ? null : key));
   const displayName = session?.user?.email || '账号';
-  const roleName = session?.role === 'superadmin' ? '平台管理员' : session?.org?.name || (session?.role === 'org.admin' ? '组织管理员' : '组织成员');
+  const roleName = session?.role === 'superadmin' ? '平台管理员' : session?.org?.name || (session?.role === 'org.admin' ? '组织管理员' : session?.role === 'org.reviewer' ? '审核员' : '组织成员');
   const go = (tab, close = true) => {
     onNavigate(tab);
     if (close) setOpen(null);
@@ -118,29 +128,20 @@ export default function TopbarActions({ onNavigate, onCreateMode, onLogin, onLog
       {open === 'notice' && <div className="tb-panel wide">
         <header className="tb-panel-head">
           <div><strong>通知</strong><small>{unread > 0 ? `${unread} 条未读` : '全部已读'}</small></div>
-          <button type="button" className="tb-link" onClick={() => { setUnread(0); notify('已全部标记为已读'); }}>
+          <button type="button" className="tb-link" onClick={() => { setNotices(list => list.map(n => ({ ...n, read: true }))); notify('已全部标记为已读'); }}>
             <Check size={13} />全部已读
           </button>
         </header>
         <ul className="tb-notices">
-          <li>
-            <button type="button" onClick={() => { setUnread(value => Math.max(0, value - 1)); go('成片'); }}>
-              <i className="dot-new" />
-              <span><strong>「第 2 集 · 旧照片特写」已生成</strong><small>2 分钟前 · 点击去成片查看</small></span>
-            </button>
-          </li>
-          <li>
-            <button type="button" onClick={() => { setUnread(value => Math.max(0, value - 1)); go('资产'); }}>
-              <i className="dot-new" />
-              <span><strong>组长驳回了「林知夏」的资产修改</strong><small>18 分钟前 · 需要重新提交</small></span>
-            </button>
-          </li>
-          <li>
-            <button type="button" onClick={() => { setUnread(value => Math.max(0, value - 1)); go('数据'); }}>
-              <i />
-              <span><strong>本周生产报表已生成</strong><small>1 小时前 · 平均耗时下降 12%</small></span>
-            </button>
-          </li>
+          {notices.map(item => (
+            <li key={item.id}>
+              <button type="button" onClick={() => { setNotices(list => list.map(n => n.id === item.id ? { ...n, read: true } : n)); go(item.tab); }}>
+                <i className={item.read ? '' : 'dot-new'} />
+                <span><strong>{item.title}</strong><small>{item.meta}</small></span>
+              </button>
+            </li>
+          ))}
+          {!notices.length && <li><button type="button" disabled><span><small>暂无通知</small></span></button></li>}
         </ul>
       </div>}
     </div>

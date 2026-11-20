@@ -13,6 +13,7 @@ import {
   FileText,
   Film,
   FolderKanban,
+  GripVertical,
   Highlighter,
   Lightbulb,
   Link2,
@@ -29,6 +30,7 @@ import {
   Send,
   ShieldAlert,
   ShieldCheck,
+  SlidersHorizontal,
   Sparkles,
   Star,
   Upload,
@@ -37,6 +39,8 @@ import {
   X,
 } from 'lucide-react';
 import { Toast, useToast } from '../components/AdminWorkspace.jsx';
+import WorkspaceChat from './WorkspaceChat.jsx';
+import { api } from '../api.js';
 import {
   AI_SCRIPT_YAML,
   ASSET_NODES,
@@ -51,19 +55,75 @@ import {
   STAGES,
   STYLES,
   VIDEO_SHOTS,
+  primeWorkspace,
+  resetWorkspace,
 } from './workspaceDemo.js';
 import './WorkspacePage.css';
 
 const styleName = key => STYLES.find(s => s.key === key)?.name || '';
 
-const ASSET_BY_NAME = new Map(ASSET_NODES.map(a => [a.name, a]));
-const ASSET_BY_ID = new Map(ASSET_NODES.map(a => [a.id, a]));
-const LINK_RE = new RegExp(`(@(?:${ASSET_NODES.map(a => a.name).join('|')}))`, 'g');
+// 时间戳 → 相对时间文案
+const relTime = ts => {
+  if (typeof ts !== 'number') return ts || '刚刚';
+  const min = Math.floor((Date.now() - ts) / 60000);
+  if (min < 1) return '刚刚';
+  if (min < 60) return `${min} 分钟前`;
+  const h = Math.floor(min / 60);
+  if (h < 24) return `${h} 小时前`;
+  const day = Math.floor(h / 24);
+  return day === 1 ? '昨天' : `${day} 天前`;
+};
+
+// 后端 projects 文档 → 工作台卡片字段（缺失字段给默认值）
+const FALLBACK_COVER = COVER_PRESETS[0]?.src || '';
+const toWorkspaceProject = item => {
+  const stages = Array.isArray(item.stages) ? item.stages : [];
+  const done = stages.filter(Boolean).length;
+  return {
+    id: item.id,
+    name: item.name || item.title || '未命名项目',
+    desc: item.desc || item.description || item.summary || '',
+    genre: item.genre || '短剧',
+    styleKey: item.styleKey || 'noir',
+    cover: item.cover || FALLBACK_COVER,
+    sessionsCount: item.sessionsCount || 1,
+    stageIndex: typeof item.stageIndex === 'number' ? item.stageIndex : done,
+    status: item.status || 'active',
+    statusText: item.statusText || (item.status === 'review' ? '待审核' : '进行中'),
+    quotaUsed: item.quotaUsed || 0,
+    quotaLimit: item.quotaLimit || 1000,
+    updatedAt: relTime(item.updatedAt),
+    archived: false,
+    favorite: false,
+  };
+};
+
+// 运行配置（存在项目文档 data.config）
+const DEFAULT_CONFIG = {
+  llmModel: 'doubao-seed-2-1-lite-260915',
+  videoModel: 'Seedance 1.0 Pro',
+  promptStrategy: '标准',
+  shotDuration: '5',
+  aspectRatio: '16:9',
+  thinking: '关闭',
+};
+const LLM_MODELS = ['doubao-seed-2-1-lite-260915', 'doubao-seed-1-6-250615', 'doubao-1-5-pro-32k'];
+const VIDEO_MODELS = ['Seedance 1.0 Pro', 'Seedance 2.5 Flash', 'Jimeng Video 3.0'];
+const PROMPT_STRATEGIES = ['精简', '标准', '电影感强化', '角色一致性优先'];
+const SHOT_DURATIONS = ['3', '5', '8', '10'];
+const ASPECT_RATIOS = ['16:9', '9:16', '1:1', '4:3'];
+const THINKING_MODES = ['关闭', '自动', '深度'];
+
+// 资产映射与 @引用正则：随 ASSET_NODES 动态重建（数据可能来自后端快照）
+const buildAssetByName = () => new Map(ASSET_NODES.map(a => [a.name, a]));
+const buildLinkRe = () => new RegExp(`(@(?:${ASSET_NODES.map(a => a.name).join('|')}))`, 'g');
 
 function renderLinkedText(text, onOpenAsset) {
-  return text.split(LINK_RE).map((part, i) => {
+  const re = buildLinkRe();
+  const byName = buildAssetByName();
+  return text.split(re).map((part, i) => {
     if (part.startsWith('@')) {
-      const asset = ASSET_BY_NAME.get(part.slice(1));
+      const asset = byName.get(part.slice(1));
       if (asset) {
         const color = GROUP_META[asset.group]?.color || '#2f6fb0';
         return (
@@ -114,15 +174,17 @@ function escapeHtml(s) {
 
 // 纯文本 -> 富文本 HTML（@资产 -> inline chip，【台词】行 -> 台词块）
 function richHtml(text) {
+  const re = buildLinkRe();
+  const byName = buildAssetByName();
   return text.split('\n').map(line => {
     const t = line.trim();
     const isDialogOld = t.startsWith('【台词】');
     const isDialogNew = t.startsWith('/台词');
     const isDialogue = isDialogOld || isDialogNew;
     const body = isDialogOld ? t.slice('【台词】'.length).trim() : isDialogNew ? t.slice('/台词'.length).trim() : line;
-    const inner = body.split(LINK_RE).map(part => {
+    const inner = body.split(re).map(part => {
       if (part.startsWith('@')) {
-        const asset = ASSET_BY_NAME.get(part.slice(1));
+        const asset = byName.get(part.slice(1));
         if (asset) {
           const color = GROUP_META[asset.group]?.color || '#2f6fb0';
           return '<span class="ws-asset-link" data-asset="' + asset.name + '" contenteditable="false" style="--ac:' + color + '"><span class="ws-asset-link-ico">&#128279;</span>' + escapeHtml(asset.name) + '</span>';
@@ -403,37 +465,53 @@ const STATUS_TEXT = {
   pass: '自检通过',
 };
 
-const SCRIPT_TOKENS = [
-  { word: '纵身翻越屋顶，凌空翻滚落地', kind: 'hard', label: '动捕' },
-  { word: '苏晚', kind: 'character' },
-  { word: '沈砚', kind: 'character' },
-  { word: '神秘人', kind: 'character' },
-  { word: '油纸伞', kind: 'prop' },
-  { word: '停走的怀表', kind: 'prop' },
-  { word: '怀表', kind: 'prop' },
-  { word: '黄铜钥匙', kind: 'prop' },
-  { word: '泛黄旧照片', kind: 'prop' },
-  { word: '旧照片', kind: 'prop' },
-  { word: '雨夜老街', kind: 'place' },
-  { word: '药铺内景', kind: 'place' },
-  { word: '黄昏天台', kind: 'place' },
-  { word: '天台', kind: 'place' },
-];
+// 根据当前 BREAKDOWN（可能被后端项目快照替换）动态构建剧本高亮 token：
+// 人物 / 道具 / 场景 / 动捕通道动作 四类词条，随项目内容变化。
+const buildScriptTokens = () => {
+  const tokens = [];
+  const push = (word, kind, label) => {
+    const w = String(word || '').trim();
+    if (!w) return;
+    if (!tokens.some(t => t.word === w)) tokens.push({ word: w, kind, label });
+  };
+  (BREAKDOWN.characters || []).forEach(c => {
+    push(c.name, 'character');
+    (c.alias || c.aliases || []).forEach(a => push(a, 'character'));
+  });
+  (BREAKDOWN.props || []).forEach(p => push(p.name, 'prop'));
+  (BREAKDOWN.places || []).forEach(p => push(p.name, 'place'));
+  // 场景/道具若带常见后缀，也加入短名以覆盖正文里的简称（如“KFC 餐厅内”→“KFC 餐厅”）
+  (BREAKDOWN.places || []).forEach(p => {
+    const short = String(p.name || '').replace(/(餐厅内|门口|店内|家中|家)\s*$/,'').trim();
+    if (short && short !== p.name) push(short, 'place');
+  });
+  (BREAKDOWN.props || []).forEach(p => {
+    const short = String(p.name || '').replace(/(\s*·.*|\s*\d+.*)$/,'').trim();
+    if (short && short !== p.name) push(short, 'prop');
+  });
+  (BREAKDOWN.hardActions || []).forEach(h => push(h.action, 'hard', '动捕'));
+  return tokens;
+};
 
-const SCRIPT_TOKEN_RE = new RegExp(
-  `(${SCRIPT_TOKENS.map(t => t.word.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')).join('|')})`,
-  'g',
-);
+const buildScriptTokenRe = tokens => {
+  if (!tokens.length) return null;
+  return new RegExp(
+    `(${tokens.map(t => t.word.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')).join('|')})`,
+    'g',
+  );
+};
 
 // 用于全屏编辑器底层高亮叠加层（与 textarea 同字体/间距，文字透明显示底层颜色）
 function renderHighlightedScript(text) {
+  const tokens = buildScriptTokens();
+  const tokenRe = buildScriptTokenRe(tokens);
   return text.split('\n').map((line, lineIdx) => {
     const isHeading = /^第\d+场/.test(line.trim());
-    const parts = line.split(SCRIPT_TOKEN_RE);
+    const parts = tokenRe ? line.split(tokenRe) : [line];
     return (
       <div key={lineIdx} className={`ws-script-line ${isHeading ? 'heading' : ''}`}>
         {line === '' ? '\u00A0' : parts.map((part, i) => {
-          const hit = SCRIPT_TOKENS.find(t => t.word === part);
+          const hit = tokens.find(t => t.word === part);
           if (!hit) return part;
           return (
             <mark key={i} className={`ws-hl ${hit.kind}`}>
@@ -590,9 +668,10 @@ const projectIdFromPath = () => {
   return m ? decodeURIComponent(m[1]) : '';
 };
 
-export default function WorkspacePage({ role } = {}) {
+export default function WorkspacePage({ role, projectId: externalProjectId } = {}) {
   const canViewTrace = role === 'superadmin' || role === 'org.admin';
   const initialPid = projectIdFromPath();
+  const initialScriptId = new URLSearchParams(window.location.search).get('script');
   const [projects, setProjects] = useState(DEMO_PROJECTS);
   const [activeProjectId, setActiveProjectId] = useState(initialPid || DEMO_PROJECTS[0].id);
   const [projectQuery, setProjectQuery] = useState('');
@@ -600,14 +679,22 @@ export default function WorkspacePage({ role } = {}) {
   const [hubStyleFilter, setHubStyleFilter] = useState('all');
   const [menuFor, setMenuFor] = useState(null); // 打开“...”菜单的项目 id
   const [newProjOpen, setNewProjOpen] = useState(false);
+  const [editingProjId, setEditingProjId] = useState(null);
   const [newProj, setNewProj] = useState({ title: '', desc: '', cover: '', genre: '悬疑短剧', styleKey: 'noir' });
   const [newProjError, setNewProjError] = useState('');
   const [stage, setStage] = useState(0); // 已解锁到第几步
-  const [activeSession, setActiveSession] = useState('part1');
+  const [activeSession, setActiveSession] = useState('ep01');
+  const [sessions, setSessions] = useState([{ id: 'ep01', name: 'EP01', scriptId: null }]);
+  const sessionFlowRef = useRef({});
+  const activeSessionName = sessions.find(s => s.id === activeSession)?.name || 'EP01';
   const [view, setView] = useState(initialPid ? 'script' : 'hub'); // hub | script | canvas | review | video | publish
   const [phase, setPhase] = useState('entry'); // entry | running | style | done
   const [entryMode, setEntryMode] = useState('preset');
-  const [idea, setIdea] = useState(IDEA_EXAMPLE);
+  const [hasProjectContent, setHasProjectContent] = useState(null); // null=读取中 / true=有剧本快照 / false=无
+  const [idea, setIdea] = useState('');
+  const [attachMenuOpen, setAttachMenuOpen] = useState(false);
+  const [scriptPickerOpen, setScriptPickerOpen] = useState(false);
+  const [scriptLibrary, setScriptLibrary] = useState([]);
   const [thread, setThread] = useState([]);
   const [reveal, setReveal] = useState({});
   const [pickedStyle, setPickedStyle] = useState(RECOMMENDED_STYLE);
@@ -615,12 +702,67 @@ export default function WorkspacePage({ role } = {}) {
   const [assets, setAssets] = useState({});
   const [log, setLog] = useState([]);
   const [logOpen, setLogOpen] = useState(true);
+  const [logPos, setLogPos] = useState(null); // null=默认左下角，拖动后记录 { x, y }
+  const [logDragging, setLogDragging] = useState(false);
+  const flowRef = useRef(null);
+  const logRef = useRef(null);
+
+  const startLogDrag = e => {
+    if (e.button !== 0 && e.pointerType === 'mouse') return;
+    const flowEl = flowRef.current;
+    const logEl = logRef.current;
+    if (!flowEl || !logEl) return;
+
+    const flowRect = flowEl.getBoundingClientRect();
+    const logRect = logEl.getBoundingClientRect();
+    const startX = e.clientX;
+    const startY = e.clientY;
+    const originX = logRect.left - flowRect.left;
+    const originY = logRect.top - flowRect.top;
+    let moved = false;
+
+    const onMove = ev => {
+      const dx = ev.clientX - startX;
+      const dy = ev.clientY - startY;
+      if (!moved && Math.hypot(dx, dy) < 4) return;
+      if (!moved) {
+        moved = true;
+        setLogDragging(true);
+      }
+      const maxX = Math.max(8, flowEl.clientWidth - logEl.offsetWidth - 8);
+      const maxY = Math.max(8, flowEl.clientHeight - logEl.offsetHeight - 8);
+      setLogPos({
+        x: Math.min(maxX, Math.max(8, originX + dx)),
+        y: Math.min(maxY, Math.max(8, originY + dy)),
+      });
+    };
+
+    const onUp = () => {
+      window.removeEventListener('pointermove', onMove);
+      window.removeEventListener('pointerup', onUp);
+      window.removeEventListener('pointercancel', onUp);
+      if (moved) {
+        setLogDragging(false);
+      } else {
+        setLogOpen(v => !v);
+      }
+    };
+
+    window.addEventListener('pointermove', onMove);
+    window.addEventListener('pointerup', onUp);
+    window.addEventListener('pointercancel', onUp);
+  };
   const [sketchStep, setSketchStep] = useState(99); // 0: 根节点, 1: 分组框, 2+: 逐个资产卡片
   const [selectedId, setSelectedId] = useState('');
   const [editPrompt, setEditPrompt] = useState('');
   const [leftOpen, setLeftOpen] = useState(true);
   const [rightOpen, setRightOpen] = useState(true);
-  const [leftTab, setLeftTab] = useState('sessions');
+  const [harnessOpen, setHarnessOpen] = useState(false);
+  const [sectionOpen, setSectionOpen] = useState(false);
+  const [sectionTitle, setSectionTitle] = useState('');
+  const [sectionError, setSectionError] = useState('');
+  const [configOpen, setConfigOpen] = useState(false);
+  const [config, setConfig] = useState(DEFAULT_CONFIG);
   const [rightTab, setRightTab] = useState('breakdown');
   const [draft, setDraft] = useState('');
   const [previewImg, setPreviewImg] = useState(null);
@@ -642,6 +784,7 @@ export default function WorkspacePage({ role } = {}) {
   const [draftPrompt, setDraftPrompt] = useState('');
   const [harnessAlert, setHarnessAlert] = useState('');
   const [toast, showToast] = useToast();
+  const [, bumpSnapshot] = useState(0); // 快照注入后强制重渲染
 
   const timersRef = useRef([]);
   const threadEndRef = useRef(null);
@@ -658,6 +801,122 @@ export default function WorkspacePage({ role } = {}) {
     timersRef.current = [];
   };
   useEffect(() => () => clearTimers(), []);
+
+  // 工作台内容优先读后端快照（projects 文档 id 与 URL 里的项目 id 一致）；读不到回退本地常量。
+  useEffect(() => {
+    let cancelled = false;
+    const apply = () => {
+      setScriptTitle(PRESET_SCRIPT.title);
+      setScriptMeta(PRESET_SCRIPT.meta);
+      setScriptText(PRESET_SCRIPT.excerpt);
+      setScriptDraft(PRESET_SCRIPT.excerpt);
+      setShotPrompts(Object.fromEntries(VIDEO_SHOTS.map(s => [s.id, s.prompt])));
+      bumpSnapshot(n => n + 1);
+    };
+    if (!activeProjectId) return undefined;
+    api.get('projects', activeProjectId)
+      .then(snap => {
+        if (cancelled) return;
+        const hydrated = snap ? primeWorkspace(snap) : false;
+        if (!hydrated) resetWorkspace();
+        setHasProjectContent(hydrated);
+        setConfig(snap?.config ? { ...DEFAULT_CONFIG, ...snap.config } : DEFAULT_CONFIG);
+        apply();
+        // 项目已有拆分好的快照（breakdown）时，直接展开拆解面板，不再走“开始拆解”假流程
+        if (hydrated && snap?.breakdown) {
+          setReveal({ style: true, scenes: true, characters: true, props: true, places: true, hard: true, mocap: true });
+          setPhase('done');
+          setStage(s => Math.max(s, 1));
+          setThread([{
+            id: 'loaded-snapshot',
+            kind: 'plan',
+            text: `已读取项目快照「${snap.name || ''}」：${(snap.breakdown.scenes || []).length} 场 · ${(snap.breakdown.characters || []).length} 个角色 · ${(snap.breakdown.props || []).length} 件道具 · ${(snap.breakdown.places || []).length} 个场景${(snap.breakdown.hardActions || []).length ? ` · ${snap.breakdown.hardActions.length} 项动捕` : ''}`,
+          }]);
+        }
+      })
+      .catch(() => {
+        if (cancelled) return;
+        resetWorkspace();
+        setHasProjectContent(false);
+        setConfig(DEFAULT_CONFIG);
+        apply();
+      });
+    return () => { cancelled = true; };
+  }, [activeProjectId]);
+
+  // Sessions = 本项目的剧本（一集一个 EP）：EP01 用项目快照，其余是项目下的剧本文档
+  useEffect(() => {
+    if (!activeProjectId) return undefined;
+    let cancelled = false;
+    api.list('scripts', 200, activeProjectId)
+      .then(({ items } = {}) => {
+        if (cancelled) return;
+        const list = Array.isArray(items)
+          ? [...items].sort((a, b) => (a.createdAt || 0) - (b.createdAt || 0))
+          : [];
+        const mapped = [
+          { id: 'ep01', name: 'EP01', scriptId: null },
+          ...list.map((s, i) => ({ id: s.id, name: s.title || `EP${String(i + 2).padStart(2, '0')}`, scriptId: s.id, title: s.title })),
+        ];
+        setSessions(mapped);
+        setActiveSession(cur => {
+          if (initialScriptId && mapped.some(s => s.id === initialScriptId)) return initialScriptId;
+          return mapped.some(s => s.id === cur) ? cur : mapped[0].id;
+        });
+      })
+      .catch(() => {});
+    return () => { cancelled = true; };
+  }, [activeProjectId]);
+
+  // 选中某一集 → 加载该集剧本内容；EP01 回退到项目快照
+  useEffect(() => {
+    const sess = sessions.find(s => s.id === activeSession);
+    if (!sess) return undefined;
+    let cancelled = false;
+    if (!sess.scriptId) {
+      if (sess.id === 'ep01') {
+        setScriptTitle(PRESET_SCRIPT.title);
+        setScriptMeta(PRESET_SCRIPT.meta);
+        setScriptText(PRESET_SCRIPT.excerpt);
+        setScriptDraft(PRESET_SCRIPT.excerpt);
+        setHasProjectContent(Boolean((PRESET_SCRIPT.excerpt || '').trim()));
+      } else {
+        // 新建但还没产出剧本的集：保持空白
+        setScriptTitle('');
+        setScriptMeta('');
+        setScriptText('');
+        setScriptDraft('');
+        setHasProjectContent(false);
+      }
+      bumpSnapshot(n => n + 1);
+      return undefined;
+    }
+    api.get('scripts', sess.scriptId)
+      .then(script => {
+        if (cancelled || !script) return;
+        setScriptTitle(script.title || PRESET_SCRIPT.title);
+        setScriptMeta(script.meta || (script.chars ? `${script.chars} 字 · ${script.scenes || 0} 场` : ''));
+        const body = script.content || script.excerpt || '';
+        setScriptText(body);
+        setScriptDraft(body);
+        setHasProjectContent(Boolean(body.trim()));
+        bumpSnapshot(n => n + 1);
+      })
+      .catch(() => {});
+    return () => { cancelled = true; };
+  }, [activeSession, sessions]);
+
+  // 项目列表优先读后端；读不到保留 DEMO_PROJECTS 兜底
+  useEffect(() => {
+    let cancelled = false;
+    api.list('projects', 100)
+      .then(({ items } = {}) => {
+        if (cancelled || !Array.isArray(items) || !items.length) return;
+        setProjects(items.map(toWorkspaceProject));
+      })
+      .catch(() => {});
+    return () => { cancelled = true; };
+  }, []);
 
   useEffect(() => {
     if (!previewImg && !scriptModalOpen) return undefined;
@@ -701,9 +960,12 @@ export default function WorkspacePage({ role } = {}) {
   };
 
   /* ---------- 第 1 步：剧本 ---------- */
-  const startScript = () => {
+  const startScript = (opts = {}) => {
     clearTimers();
-    const fromIdea = entryMode === 'idea';
+    const mode = opts.mode ?? entryMode;
+    const ideaText = String(opts.idea ?? idea).trim();
+    const hasAttached = opts.attached ?? (mode === 'preset' && hasProjectContent !== false);
+    const fromIdea = !hasAttached;
     setPhase('running');
     setReveal({});
     setRightTab('breakdown');
@@ -711,7 +973,9 @@ export default function WorkspacePage({ role } = {}) {
     setThread([{
       id: 'u1',
       kind: 'user',
-      text: fromIdea ? (idea.trim() || IDEA_EXAMPLE) : '用这份写好的剧本开工：拆场次、角色、道具、场景，推荐风格，并检查高难度动作。',
+      text: fromIdea
+        ? (ideaText || IDEA_EXAMPLE)
+        : (ideaText || '用这份写好的剧本开工：拆场次、角色、道具、场景，推荐风格，并检查高难度动作。'),
       attach: fromIdea ? '' : scriptTitle,
     }]);
 
@@ -816,6 +1080,17 @@ export default function WorkspacePage({ role } = {}) {
     if (!Object.keys(assets).length) startAssets();
   };
 
+  useEffect(() => {
+    const viewParam = new URLSearchParams(window.location.search).get('view');
+    if (initialPid && viewParam === 'canvas') {
+      setStage(s => Math.max(s, 1));
+      setLockedStyle(s => s || RECOMMENDED_STYLE);
+      setReveal({ style: true, scenes: true, characters: true, props: true, places: true, mocap: true });
+      setPhase('done');
+      enterCanvas();
+    }
+  }, []); // eslint-disable-line react-hooks/exhaustive-deps
+
   const rerunNode = id => {
     const n = ASSET_NODES.find(a => a.id === id);
     if (!n) return;
@@ -847,6 +1122,33 @@ export default function WorkspacePage({ role } = {}) {
     setScriptModalOpen(true);
   };
 
+  // 某一集真正产出剧本时才落库（新建 Session 本身不建剧本）
+  const persistProducedScript = async ({ title, text } = {}) => {
+    const sess = sessions.find(s => s.id === activeSession);
+    if (!sess || sess.id === 'ep01') return; // EP01 用项目快照，不重复建
+    const content = String(text ?? scriptText ?? '').trim();
+    if (!content) return;
+    const payload = {
+      title: (title || sess.name || scriptTitle || '未命名剧本').slice(0, 80),
+      source: '原创',
+      chars: content.replace(/\s+/g, '').length,
+      scenes: content.split(/\n(?=\s*第[一二三四五六七八九十百零两\d]+[幕场集回])/).filter(p => p.trim()).length,
+      excerpt: content.replace(/\s+/g, ' ').slice(0, 72),
+      content,
+      fileName: '',
+      projectId: activeProjectId,
+    };
+    try {
+      if (sess.scriptId) {
+        await api.patch('scripts', sess.scriptId, payload);
+      } else {
+        const doc = await api.create('scripts', payload);
+        setSessions(prev => prev.map(s => (s.id === sess.id ? { ...s, scriptId: doc.id, title: payload.title } : s)));
+        showToast(`剧本《${payload.title}》已保存到剧本库`);
+      }
+    } catch { /* 落库失败不阻断本地流程 */ }
+  };
+
   const saveScriptEdit = () => {
     const next = scriptDraft.trim();
     if (!next) return;
@@ -857,6 +1159,7 @@ export default function WorkspacePage({ role } = {}) {
       setScriptEditing(false);
       setSaving(false);
       setSaved(true);
+      persistProducedScript({ title: scriptTitle, text: next });
       pushLog('剧本资产已修订并同步至 Harness 上下文', 'ok');
       showToast('剧本已更新并同步至 Harness 上下文');
       later(1600, () => setSaved(false));
@@ -899,14 +1202,64 @@ export default function WorkspacePage({ role } = {}) {
       setScriptDraft(cleaned);
       setScriptTitle(baseName || '上传剧本');
       setScriptMeta(`${ext.replace('.', '').toUpperCase()} · ${Math.round(cleaned.replace(/\s+/g, '').length)} 字 · 已从本地导入`);
+      setHasProjectContent(true);
       setEntryMode('preset');
       pushLog(`已导入本地剧本「${baseName}」（${ext.replace('.', '').toUpperCase()}）并写入 Harness 剧本资产`, 'ok');
       showToast(`「${baseName}」已导入，稍后拆解即用此剧本`);
+      persistProducedScript({ title: baseName || '上传剧本', text: cleaned });
+      // 上传后直接在对话里记一笔，并开始拆解
+      setChatOpen(true);
+      pushChat({ id: `c${Date.now()}`, role: 'user', text: `已附加剧本「${baseName || name}」，开始拆解`, scope: chatScope, status: 'done' });
+      startScript({ mode: 'preset', attached: true, idea: '' });
     } catch (err) {
       // eslint-disable-next-line no-console
       console.error('剧本解析失败', err);
       showToast(`剧本解析失败：${err.message || '未知错误'}`);
     }
+  };
+
+  const openScriptPicker = async () => {
+    setAttachMenuOpen(false);
+    setScriptPickerOpen(true);
+    const fallback = [
+      { id: 'preset-ep01', title: PRESET_SCRIPT.title, meta: PRESET_SCRIPT.meta, text: PRESET_SCRIPT.excerpt },
+      { id: 'preset-ep02', title: '《雨巷迷踪》EP02 · 当铺暗格', meta: '民国悬疑短剧 · 4 场 · 约 110 秒', text: PRESET_SCRIPT.excerpt },
+      { id: 'preset-herb', title: '《济世堂秘闻》先导片', meta: '古风悬疑短剧 · 3 场 · 约 90 秒', text: PRESET_SCRIPT.excerpt },
+      { id: 'preset-night', title: '《长夜将明》EP01 · 停电的夜', meta: '现代悬疑短剧 · 3 场 · 约 85 秒', text: PRESET_SCRIPT.excerpt },
+    ];
+    try {
+      const res = await fetch('/api/documents?kind=scripts', { credentials: 'include' });
+      if (res.ok) {
+        const docs = await res.json();
+        const remote = (Array.isArray(docs) ? docs : [])
+          .filter(d => d?.title && (d?.content || d?.excerpt || d?.text))
+          .map(d => {
+            const body = d.content || d.excerpt || d.text || '';
+            return {
+              id: d.id,
+              title: d.title,
+              meta: d.meta || `剧本资产 · ${Math.round(body.replace(/\s+/g, '').length)} 字`,
+              text: body,
+            };
+          });
+        setScriptLibrary(remote.length ? [...remote, ...fallback.filter(f => !remote.some(r => r.title === f.title))] : fallback);
+        return;
+      }
+    } catch {
+      // fallback to demo script assets
+    }
+    setScriptLibrary(fallback);
+  };
+
+  const selectScriptAsset = item => {
+    setScriptTitle(item.title);
+    setScriptMeta(item.meta);
+    setScriptText(item.text);
+    setScriptDraft(item.text);
+    setHasProjectContent(true);
+    setEntryMode('preset');
+    setScriptPickerOpen(false);
+    showToast(`已附加剧本「${item.title}」`);
   };
 
   const submitReview = () => {
@@ -1004,10 +1357,24 @@ export default function WorkspacePage({ role } = {}) {
     setLog([]);
     setSelectedId('');
     setRightTab('breakdown');
-    setScriptTitle(proj.id === 'proj-rain-alley' ? PRESET_SCRIPT.title : `${proj.name} · EP01`);
+    setScriptTitle(`${proj.name} · EP01`);
     setScriptMeta(`${proj.genre} · 3 场 · 约 90 秒`);
     if (syncUrl) showToast(`已进入项目「${proj.name}」`);
   };
+
+  // 侧边栏/面包屑切换到其它项目时（main.jsx 的 selectedProject 变化），同步刷新工作台内容
+  useEffect(() => {
+    if (!externalProjectId) return;
+    if (externalProjectId === activeProjectId) return;
+    const target = projects.find(p => p.id === externalProjectId);
+    if (target) {
+      openProject(target, { syncUrl: false });
+    } else {
+      // 项目列表尚未加载到该 id（例如直接贴 URL），先切 id，等 projects 列表回来再进入
+      setActiveProjectId(externalProjectId);
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [externalProjectId, projects]);
 
   const backToHub = ({ syncUrl = true } = {}) => {
     clearTimers();
@@ -1031,30 +1398,69 @@ export default function WorkspacePage({ role } = {}) {
     return () => window.removeEventListener('popstate', onPop);
   }, [projects]); // eslint-disable-line react-hooks/exhaustive-deps
 
-  const createProject = () => {
+  const openEditProject = proj => {
+    setEditingProjId(proj.id);
+    setNewProj({
+      title: proj.name || '',
+      desc: proj.desc || '',
+      cover: proj.cover || '',
+      genre: proj.genre || '悬疑短剧',
+      styleKey: proj.styleKey || 'noir',
+    });
+    setNewProjError('');
+    setNewProjOpen(true);
+    setMenuFor(null);
+  };
+
+  const submitProjectForm = async () => {
     const title = newProj.title.trim();
+    const desc = newProj.desc.trim();
     if (!title) { setNewProjError('请填写项目标题'); return; }
-    if (!newProj.desc.trim()) { setNewProjError('请填写项目描述'); return; }
+    if (!desc) { setNewProjError('请填写项目描述'); return; }
     if (!newProj.cover) { setNewProjError('请选择或上传封面'); return; }
-    const proj = {
-      id: `proj-${Date.now()}`,
+
+    // 统一按后端 projects 文档的字段落库，刷新后仍能从 /api/documents/projects 读回
+    const payload = {
       name: title,
-      desc: newProj.desc.trim(),
+      desc,
       genre: newProj.genre,
       styleKey: newProj.styleKey,
       cover: newProj.cover,
       sessionsCount: 1,
       stageIndex: 0,
+      status: 'active',
       statusText: '新建 · 待拆剧本',
       quotaUsed: 0,
       quotaLimit: 1000,
-      updatedAt: '刚刚',
     };
-    setProjects(prev => [proj, ...prev]);
-    setNewProjOpen(false);
-    setNewProj({ title: '', desc: '', cover: '', genre: '悬疑短剧', styleKey: 'noir' });
-    setNewProjError('');
-    openProject(proj);
+
+    if (editingProjId) {
+      try {
+        const doc = await api.patch('projects', editingProjId, payload);
+        const updated = toWorkspaceProject(doc);
+        setProjects(prev => prev.map(p => (p.id === editingProjId ? updated : p)));
+        setNewProjOpen(false);
+        setEditingProjId(null);
+        setNewProj({ title: '', desc: '', cover: '', genre: '悬疑短剧', styleKey: 'noir' });
+        setNewProjError('');
+        showToast(`已更新「${title}」`);
+      } catch (error) {
+        setNewProjError(error.message || '保存失败');
+      }
+      return;
+    }
+
+    try {
+      const doc = await api.create('projects', payload);
+      const proj = toWorkspaceProject(doc);
+      setProjects(prev => [proj, ...prev]);
+      setNewProjOpen(false);
+      setNewProj({ title: '', desc: '', cover: '', genre: '悬疑短剧', styleKey: 'noir' });
+      setNewProjError('');
+      openProject(proj);
+    } catch (error) {
+      setNewProjError(error.message || '创建失败');
+    }
   };
 
   const resetDemo = () => {
@@ -1134,6 +1540,57 @@ export default function WorkspacePage({ role } = {}) {
             : phase === 'done' ? ['gate', '待进入画布']
               : ['idle', '待开始'];
 
+  /* ---------- Session：新建 / 切换（各自保留进度） ---------- */
+  const blankFlow = () => ({
+    phase: 'entry', thread: [], reveal: {}, stage: 0, lockedStyle: '',
+    assets: {}, log: [], shotStatus: {}, sketchStep: 99, selectedId: '',
+    entryMode: 'preset', view: 'script', rightTab: 'breakdown',
+  });
+  const captureFlow = () => ({
+    phase, thread, reveal, stage, lockedStyle, assets, log, shotStatus,
+    sketchStep, selectedId, entryMode, view, rightTab,
+  });
+  const applyFlow = f => {
+    setPhase(f.phase); setThread(f.thread); setReveal(f.reveal); setStage(f.stage);
+    setLockedStyle(f.lockedStyle); setAssets(f.assets); setLog(f.log);
+    setShotStatus(f.shotStatus); setSketchStep(f.sketchStep); setSelectedId(f.selectedId);
+    setEntryMode(f.entryMode); setView(f.view); setRightTab(f.rightTab);
+  };
+  const switchSession = id => {
+    if (id === activeSession) return;
+    sessionFlowRef.current[activeSession] = captureFlow();
+    applyFlow(sessionFlowRef.current[id] || blankFlow());
+    setActiveSession(id);
+  };
+  // 新建小节：由用户填标题，不自动生成
+  const createSession = rawTitle => {
+    const name = String(rawTitle || '').trim();
+    if (!name) return;
+    const id = `tmp-${Date.now()}`;
+    sessionFlowRef.current[activeSession] = captureFlow();
+    setSessions(prev => [...prev, { id, name, scriptId: null }]);
+    applyFlow(blankFlow());
+    setActiveSession(id);
+    setScriptTitle(name);
+    setScriptMeta('');
+    setScriptText('');
+    setScriptDraft('');
+    setHasProjectContent(false);
+    showToast(`已新建小节「${name}」`);
+  };
+  const confirmSection = () => {
+    const t = sectionTitle.trim();
+    if (!t) { setSectionError('请输入小节标题'); return; }
+    createSession(t);
+    setSectionOpen(false);
+  };
+  // 运行配置：改一项即落库到项目文档 data.config
+  const updateConfig = (patch) => {
+    const next = { ...config, ...patch };
+    setConfig(next);
+    if (activeProjectId) api.patch('projects', activeProjectId, { config: next }).catch(() => {});
+  };
+
   const goStage = idx => {
     if (idx === 0) setView('script');
     else if (idx === 1) enterCanvas();
@@ -1142,6 +1599,94 @@ export default function WorkspacePage({ role } = {}) {
     else if (idx === 4) setView('publish');
   };
   const viewIndex = view === 'script' ? 0 : view === 'canvas' ? 1 : view === 'review' ? 2 : view === 'video' ? 3 : 4;
+
+  /* ---------- 全流程 AI 对话（底部常驻，HITL 提案卡） ---------- */
+  const [chatMap, setChatMap] = useState({});
+  const [chatInput, setChatInput] = useState('');
+  const [chatOpen, setChatOpen] = useState(false);
+  const chatQueueRef = useRef([]);
+  const chatMessages = chatMap[activeSession] || [];
+  const chatBusy = phase === 'running' || (view === 'canvas' && anyBusy);
+  const pushChat = msg => setChatMap(m => ({ ...m, [activeSession]: [...(m[activeSession] || []), msg] }));
+  const patchChat = (id, patch) => setChatMap(m => ({ ...m, [activeSession]: (m[activeSession] || []).map(x => (x.id === id ? { ...x, ...patch } : x)) }));
+
+  const chatScope = (() => {
+    if (view === 'canvas' && selectedId) {
+      const node = ASSET_NODES.find(a => a.id === selectedId);
+      if (node) return { kind: 'asset', targetId: selectedId, step: '资产图', label: `${node.name} · ${node.sub}`, current: editPrompt || node.prompt || '' };
+    }
+    if (view === 'video' && editingShotId) {
+      const shot = VIDEO_SHOTS.find(s => s.id === editingShotId);
+      return { kind: 'shot', targetId: editingShotId, step: '生视频', label: `分镜 · ${shot?.title || editingShotId}`, current: shotPrompts[editingShotId] || shot?.prompt || '' };
+    }
+    return { kind: 'general', step: STAGES[viewIndex]?.label || '剧本', label: `${activeSessionName} · ${STAGES[viewIndex]?.label || '剧本'}`, current: '' };
+  })();
+
+  const chatReply = (text, scope, userMsgId) => {
+    const finish = (replyText, proposal) => {
+      pushChat({ id: `c${Date.now()}${Math.random().toString(36).slice(2, 5)}`, role: 'agent', text: replyText, proposal, status: proposal ? 'proposed' : 'info' });
+      if (userMsgId) patchChat(userMsgId, { status: 'done' });
+    };
+    const norm = s => String(s || '').replace(/[\s，,。；;、]/g, '');
+    if (scope.kind === 'asset' || scope.kind === 'shot') {
+      // 由后端/模型决定：命中 modify_prompt 工具才出提案，否则只回复
+      api.rewritePrompt({ current: scope.current, instruction: text, context: { step: scope.step, label: scope.label } })
+        .then(r => {
+          const before = scope.current || '';
+          const after = String(r?.after || '').trim();
+          const routed = r?.action === 'modify_prompt';
+          const changed = routed && after && r?.changed !== false && norm(after) !== norm(before);
+          if (changed) {
+            finish(r?.summary || `已为「${scope.label}」生成修订建议。`, { field: scope.kind, targetId: scope.targetId, before, after, mode: 'rewrite' });
+          } else {
+            finish(r?.reply || r?.summary || '好的，收到。');
+          }
+        })
+        .catch(() => {
+          finish('抱歉，改写服务暂时不可用，请稍后再试。');
+        });
+      return;
+    }
+    later(900, () => finish(`收到。当前在「${scope.step}」，我已把「${text}」计入本小节上下文。要改具体某句提示词，请先在画布节点或分镜里选中它再聊。`));
+  };
+
+  const sendChat = () => {
+    const text = chatInput.trim();
+    if (!text) return;
+    const id = `c${Date.now()}${Math.random().toString(36).slice(2, 5)}`;
+    pushChat({ id, role: 'user', text, scope: chatScope, status: chatBusy ? 'queued' : 'open' });
+    setChatInput('');
+    setChatOpen(true);
+    // 第 1 步还没开始：对话即驱动 —— 有剧本用消息当补充要求直接拆解，否则当创意扩写
+    if (view === 'script' && phase === 'entry') {
+      const attached = entryMode === 'preset' && hasProjectContent === true;
+      if (attached) startScript({ mode: 'preset', attached: true, idea: text });
+      else { setEntryMode('idea'); setIdea(text); startScript({ mode: 'idea', idea: text }); }
+      return;
+    }
+    if (chatBusy) chatQueueRef.current.push({ id, text, scope: chatScope });
+    else chatReply(text, chatScope, id);
+  };
+
+  useEffect(() => {
+    if (chatBusy || !chatQueueRef.current.length) return;
+    const queue = chatQueueRef.current;
+    chatQueueRef.current = [];
+    queue.forEach(item => { patchChat(item.id, { status: 'open' }); chatReply(item.text, item.scope, item.id); });
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [chatBusy]);
+
+  const applyChatProposal = (msg, proposal) => {
+    if (proposal.field === 'asset') {
+      setEditPrompt(proposal.after);
+    } else if (proposal.field === 'shot') {
+      setShotPrompts(prev => ({ ...prev, [proposal.targetId]: proposal.after }));
+      if (editingShotId === proposal.targetId) setDraftPrompt(proposal.after);
+    }
+    patchChat(msg.id, { status: 'applied' });
+    showToast('已应用建议');
+  };
+  const dismissChatProposal = msg => patchChat(msg.id, { status: 'dismissed' });
 
   /* ---------- 渲染：线程条目 ---------- */
   const renderItem = item => {
@@ -1425,6 +1970,12 @@ export default function WorkspacePage({ role } = {}) {
     if (menuFor) { document.addEventListener('mousedown', close); return () => document.removeEventListener('mousedown', close); }
   }, [menuFor]);
 
+  // 点击附件菜单外关闭
+  useEffect(() => {
+    const close = e => { if (!e.target.closest('.ws-agy-attach-wrap')) setAttachMenuOpen(false); };
+    if (attachMenuOpen) { document.addEventListener('mousedown', close); return () => document.removeEventListener('mousedown', close); }
+  }, [attachMenuOpen]);
+
   /* ---------- 渲染 ---------- */
   if (view === 'hub') {
     const archivedCount = projects.filter(p => p.archived).length;
@@ -1466,7 +2017,7 @@ export default function WorkspacePage({ role } = {}) {
                 Trace ↗
               </button>
             )}
-            <button type="button" className="ws-btn primary" onClick={() => { setNewProj({ title: '', desc: '', cover: '', genre: '悬疑短剧', styleKey: 'noir' }); setNewProjError(''); setNewProjOpen(true); }}>
+            <button type="button" className="ws-btn primary" onClick={() => { setEditingProjId(null); setNewProj({ title: '', desc: '', cover: '', genre: '悬疑短剧', styleKey: 'noir' }); setNewProjError(''); setNewProjOpen(true); }}>
               <Plus size={14} /> 新建项目
             </button>
           </div>
@@ -1530,6 +2081,10 @@ export default function WorkspacePage({ role } = {}) {
                       </button>
                       {menuFor === proj.id && (
                         <div className="ws-hub-menu">
+                          <button type="button" onClick={() => openEditProject(proj)}>
+                            <PenTool size={15} />
+                            编辑信息
+                          </button>
                           <button type="button" onClick={() => { toggleFavorite(proj); setMenuFor(null); }}>
                             <Star size={15} fill={proj.favorite ? 'currentColor' : 'none'} />
                             {proj.favorite ? '取消收藏' : '收藏'}
@@ -1559,14 +2114,14 @@ export default function WorkspacePage({ role } = {}) {
         </div>
 
         {newProjOpen && (
-          <div className="ws-lightbox" role="dialog" aria-modal="true" onClick={() => setNewProjOpen(false)}>
+          <div className="ws-lightbox" role="dialog" aria-modal="true" onClick={() => { setNewProjOpen(false); setEditingProjId(null); }}>
             <div className="ws-hub-modal" onClick={e => e.stopPropagation()}>
               <div className="ws-hub-modal-head">
                 <div>
-                  <b>新建项目</b>
-                  <small>填写项目基础信息，创建后即可进入工作台拆剧本</small>
+                  <b>{editingProjId ? '编辑项目' : '新建项目'}</b>
+                  <small>{editingProjId ? '修改项目封面、标题与描述' : '填写项目基础信息，创建后即可进入工作台拆剧本'}</small>
                 </div>
-                <button type="button" className="ws-btn icon" onClick={() => setNewProjOpen(false)} aria-label="关闭">
+                <button type="button" className="ws-btn icon" onClick={() => { setNewProjOpen(false); setEditingProjId(null); }} aria-label="关闭">
                   <X size={15} />
                 </button>
               </div>
@@ -1639,9 +2194,9 @@ export default function WorkspacePage({ role } = {}) {
               </div>
 
               <div className="ws-hub-modal-foot">
-                <button type="button" className="ws-btn" onClick={() => setNewProjOpen(false)}>取消</button>
-                <button type="button" className="ws-btn primary" onClick={createProject}>
-                  创建并进入 <ArrowRight size={13} />
+                <button type="button" className="ws-btn" onClick={() => { setNewProjOpen(false); setEditingProjId(null); }}>取消</button>
+                <button type="button" className="ws-btn primary" onClick={submitProjectForm}>
+                  {editingProjId ? '保存修改' : <>创建并进入 <ArrowRight size={13} /></>}
                 </button>
               </div>
             </div>
@@ -1652,6 +2207,63 @@ export default function WorkspacePage({ role } = {}) {
       </div>
     );
   }
+
+  // Harness 全局属性（独立页面/弹层使用）
+  const renderHarness = () => (
+    <>
+      <div className="ws-h-title">剧本资产 & Project Metadata</div>
+      <button type="button" className="ws-h-item clickable" onClick={() => { setHarnessOpen(false); openScriptReader('human'); }}>
+        <FileText size={13} />
+        <span>{scriptTitle || '未命名剧本'}</span>
+        <small className="ok">正文</small>
+      </button>
+      <button type="button" className="ws-h-item clickable" onClick={() => { setHarnessOpen(false); openScriptReader('yaml'); }}>
+        <Wrench size={13} />
+        <span>AI 结构化剧本 (YAML)</span>
+        <small className="ok">Spec</small>
+      </button>
+      <div className="ws-h-title">风格锁定</div>
+      <div className="ws-h-item">
+        {lockedStyle ? <Lock size={13} /> : <Sparkles size={13} />}
+        <span>{lockedStyle ? styleName(lockedStyle) : '未锁定'}</span>
+        <small className={lockedStyle ? 'ok' : ''}>{lockedStyle ? '不可切换' : '第 1 步确认'}</small>
+      </div>
+      <div className="ws-h-title">三类资产齐套</div>
+      {['character', 'prop', 'place'].map(g => (
+        <div key={g} className="ws-h-item">
+          <span className="wsn-dot" style={{ background: GROUP_META[g].color }} />
+          <span>{GROUP_META[g].label}</span>
+          <small className={counts[g][0] === counts[g][1] ? 'ok' : ''}>{counts[g][0]}/{counts[g][1]}</small>
+        </div>
+      ))}
+      <div className="ws-h-title">Session 状态机</div>
+      <div className="ws-h-item">
+        <span className="wsn-dot" style={{ background: '#2f6fb0' }} />
+        <span>{STAGES[viewIndex]?.label || '剧本'}</span>
+        <small className="ok">{view.toUpperCase()}</small>
+      </div>
+      <div className="ws-h-title">记忆上下文 · 跨 Session 共享</div>
+      <div className="ws-h-item">
+        <Sparkles size={13} />
+        <span>剧本 1 · 风格 {lockedStyle ? 1 : 0} · 共享资产 {allPass ? 9 : 0}</span>
+        <small className="ok">已挂载</small>
+      </div>
+      <div className="ws-h-title">成本与重试护栏</div>
+      <div className="ws-h-item"><RotateCcw size={13} /><span>maxRetry 上限</span><small className="ok">3 次</small></div>
+      <div className="ws-h-item"><ShieldCheck size={13} /><span>单集算力上限</span><small className="ok">160 / 1000</small></div>
+      <div className="ws-h-title">SOP 铁律 · 合规与幂等</div>
+      <div className="ws-h-item"><ShieldCheck size={13} /><span>严禁文生视频直出</span><small className="ok">生效</small></div>
+      <div className="ws-h-item"><Lock size={13} /><span>资产图未过审不得生视频</span><small className="warn">{stage >= 3 ? '已解锁' : '锁定中'}</small></div>
+      <div className="ws-h-item"><Clapperboard size={13} /><span>高难度动作走动捕通道</span><small>{reveal.hard ? `${BREAKDOWN.hardActions.length} 项` : '—'}</small></div>
+      <div className="ws-h-item"><Check size={13} /><span>工具调用幂等 & 合规校验</span><small className="ok">通过</small></div>
+    </>
+  );
+
+  // 右栏随步骤切换：1 剧本→拆解表，2 资产图→节点详情，生视频→资产列表；审核/发布不展开
+  const rightMode = view === 'canvas' ? 'node'
+    : view === 'script' ? 'breakdown'
+      : view === 'video' ? 'assets'
+        : null;
 
   return (
     <div className="ws-shell">
@@ -1667,6 +2279,11 @@ export default function WorkspacePage({ role } = {}) {
 
         {/* 五步阶段条（集成在顶栏） */}
         <nav className="ws-stepper" aria-label="生产阶段">
+          <button type="button" className="ws-step harness" onClick={() => setHarnessOpen(true)} title="查看项目全局属性（Harness）">
+            <span className="ws-step-no"><ShieldCheck size={11} /></span>
+            <span className="ws-step-text"><b>Harness</b></span>
+            <span className="ws-step-line" />
+          </button>
           {STAGES.map((s, i) => {
             const state = i < stage ? 'done' : i === stage ? 'current' : 'locked';
             return (
@@ -1696,7 +2313,8 @@ export default function WorkspacePage({ role } = {}) {
               Trace ↗
             </button>
           )}
-          <button type="button" className="ws-btn" onClick={resetDemo}><RotateCcw size={13} /> 重置演示</button>
+          <button type="button" className="ws-btn" onClick={() => setConfigOpen(true)} title="运行配置"><SlidersHorizontal size={13} /> 配置</button>
+          <button type="button" className="ws-btn" onClick={resetDemo}><RotateCcw size={13} /> 重新开始</button>
           <button type="button" className={`ws-btn icon ${leftOpen ? 'on' : ''}`} onClick={() => setLeftOpen(v => !v)} title="左栏"><PanelLeft size={15} /></button>
           <button type="button" className={`ws-btn icon ${rightOpen ? 'on' : ''}`} onClick={() => setRightOpen(v => !v)} title="右栏"><PanelRight size={15} /></button>
         </div>
@@ -1706,82 +2324,26 @@ export default function WorkspacePage({ role } = {}) {
         {leftOpen && (
           <aside className="ws-left">
             <div className="ws-tabs">
-              <button type="button" className={leftTab === 'sessions' ? 'active' : ''} onClick={() => setLeftTab('sessions')}>Sessions</button>
-              <button type="button" className={leftTab === 'harness' ? 'active' : ''} onClick={() => setLeftTab('harness')}>Harness</button>
+              <button type="button" className="active">小节</button>
             </div>
             <div className="ws-left-scroll">
-              {leftTab === 'sessions' ? (
-                <>
+              {sessions.map(session => {
+                const isBase = session.id === 'ep01';
+                const dot = isBase ? sessionStatus[0] : 'idle';
+                const meta = isBase ? sessionStatus[1] : '待开始';
+                return (
                   <button
+                    key={session.id}
                     type="button"
-                    className={`ws-session ${activeSession === 'part1' ? 'selected' : ''}`}
-                    onClick={() => setActiveSession('part1')}
+                    className={`ws-session ${activeSession === session.id ? 'selected' : ''}`}
+                    onClick={() => switchSession(session.id)}
                   >
-                    <div className="ws-session-top"><i className={`ws-dot ${sessionStatus[0]}`} /><b>Part 1</b></div>
-                    <div className="ws-session-meta">{sessionStatus[1]}</div>
+                    <div className="ws-session-top"><i className={`ws-dot ${dot}`} /><b>{session.name}</b></div>
+                    <div className="ws-session-meta">{meta}</div>
                   </button>
-                  <button
-                    type="button"
-                    className={`ws-session ${activeSession === 'part2' ? 'selected' : ''}`}
-                    onClick={() => {
-                      setActiveSession('part2');
-                      showToast(allPass ? '已切到 Part 2 · 自动共享项目 9 项过审资产' : '已切到 Part 2 Session');
-                    }}
-                  >
-                    <div className="ws-session-top"><i className={`ws-dot ${allPass ? 'gate' : 'idle'}`} /><b>Part 2</b></div>
-                    <div className="ws-session-meta">{allPass ? '已共享 9 项资产' : '待开始'}</div>
-                  </button>
-                  <button type="button" className="ws-new-session" onClick={() => showToast('演示中仅开放 Part 1 / Part 2')}>+ 新建 Session</button>
-                </>
-              ) : (
-                <>
-                  <div className="ws-h-title">剧本资产 & Project Metadata</div>
-                  <button type="button" className="ws-h-item clickable" onClick={() => openScriptReader('human')}>
-                    <FileText size={13} />
-                    <span>{scriptTitle}</span>
-                    <small className="ok">正文</small>
-                  </button>
-                  <button type="button" className="ws-h-item clickable" onClick={() => openScriptReader('yaml')}>
-                    <Wrench size={13} />
-                    <span>AI 结构化剧本 (YAML)</span>
-                    <small className="ok">Spec</small>
-                  </button>
-                  <div className="ws-h-title">风格锁定</div>
-                  <div className="ws-h-item">
-                    {lockedStyle ? <Lock size={13} /> : <Sparkles size={13} />}
-                    <span>{lockedStyle ? styleName(lockedStyle) : '未锁定'}</span>
-                    <small className={lockedStyle ? 'ok' : ''}>{lockedStyle ? '不可切换' : '第 1 步确认'}</small>
-                  </div>
-                  <div className="ws-h-title">三类资产齐套</div>
-                  {['character', 'prop', 'place'].map(g => (
-                    <div key={g} className="ws-h-item">
-                      <span className="wsn-dot" style={{ background: GROUP_META[g].color }} />
-                      <span>{GROUP_META[g].label}</span>
-                      <small className={counts[g][0] === counts[g][1] ? 'ok' : ''}>{counts[g][0]}/{counts[g][1]}</small>
-                    </div>
-                  ))}
-                  <div className="ws-h-title">Session 状态机</div>
-                  <div className="ws-h-item">
-                    <span className="wsn-dot" style={{ background: '#2f6fb0' }} />
-                    <span>{STAGES[viewIndex]?.label || '剧本'}</span>
-                    <small className="ok">{view.toUpperCase()}</small>
-                  </div>
-                  <div className="ws-h-title">记忆上下文 · 跨 Session 共享</div>
-                  <div className="ws-h-item">
-                    <Sparkles size={13} />
-                    <span>剧本 1 · 风格 {lockedStyle ? 1 : 0} · 共享资产 {allPass ? 9 : 0}</span>
-                    <small className="ok">{activeSession === 'part2' && allPass ? 'Part 2 已继承' : '已挂载'}</small>
-                  </div>
-                  <div className="ws-h-title">成本与重试护栏</div>
-                  <div className="ws-h-item"><RotateCcw size={13} /><span>maxRetry 上限</span><small className="ok">3 次</small></div>
-                  <div className="ws-h-item"><ShieldCheck size={13} /><span>单集算力上限</span><small className="ok">160 / 1000</small></div>
-                  <div className="ws-h-title">SOP 铁律 · 合规与幂等</div>
-                  <div className="ws-h-item"><ShieldCheck size={13} /><span>严禁文生视频直出</span><small className="ok">生效</small></div>
-                  <div className="ws-h-item"><Lock size={13} /><span>资产图未过审不得生视频</span><small className="warn">{stage >= 3 ? '已解锁' : '锁定中'}</small></div>
-                  <div className="ws-h-item"><Clapperboard size={13} /><span>高难度动作走动捕通道</span><small>{reveal.hard ? `${BREAKDOWN.hardActions.length} 项` : '—'}</small></div>
-                  <div className="ws-h-item"><Check size={13} /><span>工具调用幂等 & 合规校验</span><small className="ok">通过</small></div>
-                </>
-              )}
+                );
+              })}
+              <button type="button" className="ws-new-session" onClick={() => { setSectionTitle(''); setSectionError(''); setSectionOpen(true); }}>+ 新建小节</button>
             </div>
           </aside>
         )}
@@ -1790,49 +2352,10 @@ export default function WorkspacePage({ role } = {}) {
           {view === 'script' && (
             <>
               <div className="ws-center-bar">
-                <b>第 1 步 · 剧本（{activeSession === 'part2' ? 'Part 2' : 'Part 1'}）</b>
-                <span>
-                  {activeSession === 'part2' && allPass
-                    ? '已自动继承项目锁定的风格与 9 项过审资产，无需重新生成'
-                    : 'Agent 拆解剧本、推荐风格、标记动捕；你只需确认风格'}
-                </span>
+                <b>第 1 步 · 剧本（{activeSessionName}）</b>
+                <span>Agent 拆解剧本、推荐风格、标记动捕；你只需确认风格</span>
               </div>
-              {phase === 'entry' ? (
-                <div className="ws-entry">
-                  <h2>从哪里开始？</h2>
-                  <p>选一种方式交给 Agent，后面的拆解由它自己跑完</p>
-                  <div className="ws-entry-cards">
-                    <button type="button" className={`ws-entry-card ${entryMode === 'preset' ? 'active' : ''}`} onClick={() => setEntryMode('preset')}>
-                      <div className="ws-entry-icon"><FileText size={18} /></div>
-                      <b>用写好的剧本</b>
-                      <span>上传或选择已有剧本，直接拆解</span>
-                    </button>
-                    <button type="button" className={`ws-entry-card ${entryMode === 'idea' ? 'active' : ''}`} onClick={() => setEntryMode('idea')}>
-                      <div className="ws-entry-icon"><Wand2 size={18} /></div>
-                      <b>从 0 开始</b>
-                      <span>一句话创意，Agent 先扩写成剧本</span>
-                    </button>
-                  </div>
-                  {entryMode === 'preset' ? (
-                    <div className="ws-entry-detail">
-                      <div className="ws-script-card">
-                        <FileText size={16} />
-                        <div><b>{scriptTitle}</b><small>{scriptMeta}</small></div>
-                        <span className="ws-script-ok"><Check size={12} /> 已选择</span>
-                      </div>
-                      <button type="button" className="ws-upload" onClick={() => fileInputRef.current?.click()}><Upload size={13} /> 上传其他剧本（.md / .docx / .txt）</button>
-                      <input ref={fileInputRef} type="file" accept=".md,.txt,.markdown,.text,.docx" onChange={handleUpload} hidden />
-                    </div>
-                  ) : (
-                    <div className="ws-entry-detail">
-                      <textarea className="ws-idea" rows={3} value={idea} onChange={e => setIdea(e.target.value)} placeholder="一句话说清：时代、人物、事件、悬念" />
-                    </div>
-                  )}
-                  <button type="button" className="ws-btn primary lg" onClick={startScript}>
-                    <Sparkles size={14} /> 开始拆解
-                  </button>
-                </div>
-              ) : (
+              {phase !== 'entry' && (
                 <>
                   <div className="ws-thread">
                     {thread.map(renderItem)}
@@ -1874,7 +2397,7 @@ export default function WorkspacePage({ role } = {}) {
                   {allPass ? <>提交审核 <ArrowRight size={13} /></> : <><Loader2 size={13} className="spin" /> 资产生成中</>}
                 </button>
               </div>
-              <div className="ws-flow">
+              <div className="ws-flow" ref={flowRef}>
                 {sketchStep < 11 && (
                   <div className="ws-canvas-pen-banner" aria-hidden="true">
                     <PenTool size={13} /> Agent 正在从 0 勾勒画布框架…
@@ -1905,9 +2428,20 @@ export default function WorkspacePage({ role } = {}) {
                   <Controls showInteractive={false} position="bottom-right" />
                 </ReactFlow>
 
-                <div className={`ws-log ${logOpen ? '' : 'closed'}`}>
-                  <button type="button" className="ws-log-head" onClick={() => setLogOpen(v => !v)}>
-                    <Wrench size={12} /> Agent Loop 日志 <span>{log.length}</span><ChevronDown size={12} className={logOpen ? '' : 'rot'} />
+                <div
+                  ref={logRef}
+                  className={`ws-log ${logOpen ? '' : 'closed'} ${logDragging ? 'dragging' : ''}`}
+                  style={logPos ? { left: logPos.x, top: logPos.y, bottom: 'auto' } : undefined}
+                >
+                  <button
+                    type="button"
+                    className="ws-log-head"
+                    onPointerDown={startLogDrag}
+                    title="按住拖动位置，点击折叠/展开"
+                  >
+                    <GripVertical size={12} className="ws-log-grip" />
+                    <Wrench size={12} /> Agent Loop 日志 <span>{log.length}</span>
+                    <ChevronDown size={12} className={logOpen ? '' : 'rot'} />
                   </button>
                   {logOpen && (
                     <div className="ws-log-body">
@@ -2121,27 +2655,32 @@ export default function WorkspacePage({ role } = {}) {
           )}
         </section>
 
-        {rightOpen && (
+        {rightOpen && rightMode && (
           <aside className="ws-right">
-            {view === 'video' ? (
-              <>
-                <div className="ws-tabs">
-                  <button type="button" className="active">资产列表（9）</button>
-                </div>
-                {assetsPanel}
-              </>
-            ) : (
-              <>
-                <div className="ws-tabs">
-                  <button type="button" className={rightTab === 'breakdown' ? 'active' : ''} onClick={() => setRightTab('breakdown')}>拆解表</button>
-                  <button type="button" className={rightTab === 'node' ? 'active' : ''} onClick={() => setRightTab('node')} disabled={stage < 1}>节点详情</button>
-                </div>
-                {rightTab === 'breakdown' ? breakdownPanel : nodePanel}
-              </>
-            )}
+            <div className="ws-tabs">
+              <button type="button" className="active">
+                {rightMode === 'assets' ? `资产列表（${ASSET_NODES.length}）` : rightMode === 'node' ? '节点详情' : '拆解表'}
+              </button>
+            </div>
+            {rightMode === 'assets' ? assetsPanel : rightMode === 'node' ? nodePanel : breakdownPanel}
           </aside>
         )}
       </div>
+
+      <WorkspaceChat
+        open={chatOpen}
+        onToggle={() => setChatOpen(o => !o)}
+        scopeLabel={chatScope.label}
+        messages={chatMessages}
+        input={chatInput}
+        setInput={setChatInput}
+        onSend={sendChat}
+        onApply={applyChatProposal}
+        onDismiss={dismissChatProposal}
+        busy={chatBusy}
+        onAttach={() => fileInputRef.current?.click()}
+      />
+      <input ref={fileInputRef} type="file" accept=".md,.txt,.markdown,.text,.docx" onChange={handleUpload} hidden />
 
       {previewImg && (
         <div className="ws-lightbox" role="dialog" aria-modal="true" onClick={() => setPreviewImg(null)}>
@@ -2251,6 +2790,106 @@ export default function WorkspacePage({ role } = {}) {
                   />
                 </div>
               )}
+            </div>
+          </div>
+        </div>
+      )}
+
+      {configOpen && (
+        <div className="ws-lightbox" role="dialog" aria-modal="true" onClick={() => setConfigOpen(false)}>
+          <div className="ws-config-dialog" onClick={e => e.stopPropagation()}>
+            <header className="ws-config-head">
+              <div><b>运行配置</b><small>语言模型 · 视频模型 · 提示词策略 · 分镜时长 · 画幅 · 思考模式</small></div>
+              <button type="button" className="ws-lightbox-close" onClick={() => setConfigOpen(false)} aria-label="关闭"><X size={18} /></button>
+            </header>
+            <div className="ws-config-body">
+              {[
+                { key: 'llmModel', label: '语言模型', options: LLM_MODELS },
+                { key: 'videoModel', label: '视频模型', options: VIDEO_MODELS },
+                { key: 'promptStrategy', label: '提示词策略', options: PROMPT_STRATEGIES },
+                { key: 'shotDuration', label: '分镜时长', options: SHOT_DURATIONS, suffix: ' 秒' },
+                { key: 'aspectRatio', label: '画幅', options: ASPECT_RATIOS },
+                { key: 'thinking', label: '思考模式', options: THINKING_MODES },
+              ].map(f => (
+                <label key={f.key} className="ws-config-row">
+                  <span>{f.label}</span>
+                  <select value={config[f.key]} onChange={e => updateConfig({ [f.key]: e.target.value })}>
+                    {f.options.map(o => <option key={o} value={o}>{f.suffix ? `${o}${f.suffix}` : o}</option>)}
+                  </select>
+                </label>
+              ))}
+            </div>
+            <p className="ws-config-note">配置保存在当前项目下；真正发起生成时按此生效。</p>
+          </div>
+        </div>
+      )}
+
+      {sectionOpen && (
+        <div className="ws-lightbox" role="dialog" aria-modal="true" onClick={() => setSectionOpen(false)}>
+          <div className="ws-section-dialog" onClick={e => e.stopPropagation()}>
+            <b>新建小节</b>
+            <p>给这一小节起个标题（之后产出的剧本会用这个标题命名）</p>
+            <input
+              value={sectionTitle}
+              onChange={e => { setSectionTitle(e.target.value); setSectionError(''); }}
+              onKeyDown={e => { if (e.key === 'Enter') confirmSection(); }}
+              placeholder="例如：EP03 · 钟楼夜话"
+              autoFocus
+            />
+            {sectionError && <span className="ws-section-error">{sectionError}</span>}
+            <div className="ws-section-foot">
+              <button type="button" onClick={() => setSectionOpen(false)}>取消</button>
+              <button type="button" className="primary" onClick={confirmSection}>创建小节</button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {harnessOpen && (
+        <div className="ws-lightbox" role="dialog" aria-modal="true" onClick={() => setHarnessOpen(false)}>
+          <div className="ws-harness-page" onClick={e => e.stopPropagation()}>
+            <header className="ws-harness-page-head">
+              <div>
+                <b>Harness · 全局属性</b>
+                <small>剧本资产 · 风格锁定 · 资产齐套 · 成本护栏 · SOP 铁律</small>
+              </div>
+              <button type="button" className="ws-lightbox-close" onClick={() => setHarnessOpen(false)} aria-label="关闭"><X size={18} /></button>
+            </header>
+            <div className="ws-harness-page-body">
+              {renderHarness()}
+            </div>
+          </div>
+        </div>
+      )}
+
+      {scriptPickerOpen && (
+        <div className="ws-lightbox" role="dialog" aria-modal="true" onClick={() => setScriptPickerOpen(false)}>
+          <div className="ws-hub-modal ws-script-picker" onClick={e => e.stopPropagation()}>
+            <div className="ws-hub-modal-head">
+              <div>
+                <b>从剧本资产选择</b>
+                <small>选择一个已有剧本附加到当前对话，Agent 将直接拆解</small>
+              </div>
+              <button type="button" className="ws-btn icon" onClick={() => setScriptPickerOpen(false)} aria-label="关闭">
+                <X size={15} />
+              </button>
+            </div>
+            <div className="ws-script-picker-list">
+              {scriptLibrary.map(item => (
+                <button
+                  key={item.id}
+                  type="button"
+                  className={`ws-script-picker-item ${scriptTitle === item.title && entryMode === 'preset' ? 'active' : ''}`}
+                  onClick={() => selectScriptAsset(item)}
+                >
+                  <FileText size={16} />
+                  <div>
+                    <b>{item.title}</b>
+                    <small>{item.meta}</small>
+                  </div>
+                  {scriptTitle === item.title && entryMode === 'preset' && <Check size={14} className="ws-script-picker-check" />}
+                </button>
+              ))}
             </div>
           </div>
         </div>

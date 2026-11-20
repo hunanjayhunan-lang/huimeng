@@ -44,14 +44,14 @@ export const api = {
   grantOrgQuota: (id, amount) => request(`/platform/orgs/${encodeURIComponent(id)}/quota`, { method: 'POST', body: JSON.stringify({ amount }) }),
   logout: () => request('/auth/session', { method: 'DELETE' }),
   platformOrganizations: () => request('/platform/orgs'),
-  // 平台用户目录（superadmin）
-  platformUsers: ({ role, status, orgId, q } = {}) => {
-    const query = new URLSearchParams();
+  // 平台用户目录（superadmin）：服务端真分页
+  platformUsers: ({ role, status, orgId, q, limit = 50, offset = 0 } = {}) => {
+    const query = new URLSearchParams({ limit, offset });
     if (role) query.set('role', role);
     if (status) query.set('status', status);
     if (orgId) query.set('orgId', orgId);
     if (q) query.set('q', q);
-    return request(`/platform/users${query.size ? `?${query}` : ''}`);
+    return request(`/platform/users?${query}`);
   },
   setPlatformUserStatus: (id, status) => request(`/platform/users/${encodeURIComponent(id)}/status`, { method: 'PATCH', body: JSON.stringify({ status }) }),
   revokePlatformUserSessions: id => request(`/platform/users/${encodeURIComponent(id)}/revoke-sessions`, { method: 'POST' }),
@@ -72,8 +72,43 @@ export const api = {
   revokeInvite: id => request(`/org/invites/${encodeURIComponent(id)}`, { method: 'DELETE' }),
   setMemberRole: (id, role) => request(`/org/members/${encodeURIComponent(id)}`, { method: 'PATCH', body: JSON.stringify({ role }) }),
   removeMember: id => request(`/org/members/${encodeURIComponent(id)}`, { method: 'DELETE' }),
-  orgAudit: (limit = 100) => request(`/org/audit?limit=${limit}`),
+  orgAudit: ({ limit = 50, offset = 0, action, actor, from, to, q } = {}) => {
+    const params = new URLSearchParams({ limit, offset });
+    if (action) params.set('action', action);
+    if (actor) params.set('actor', actor);
+    if (from) params.set('from', from);
+    if (to) params.set('to', to);
+    if (q) params.set('q', q);
+    return request(`/org/audit?${params}`);
+  },
+  // 平台跨组织审计（superadmin）
+  platformAudit: ({ limit = 50, offset = 0, action, actor, from, to, q, orgId } = {}) => {
+    const params = new URLSearchParams({ limit, offset });
+    if (action) params.set('action', action);
+    if (actor) params.set('actor', actor);
+    if (from) params.set('from', from);
+    if (to) params.set('to', to);
+    if (q) params.set('q', q);
+    if (orgId) params.set('orgId', orgId);
+    return request(`/platform/audit?${params}`);
+  },
   orgQuota: () => request('/org/quota'),
+  orgQuotaAlerts: ({ warn, critical } = {}) => {
+    const params = new URLSearchParams();
+    if (warn) params.set('warn', warn);
+    if (critical) params.set('critical', critical);
+    return request(`/org/quota/alerts${params.size ? `?${params}` : ''}`);
+  },
+  orgQuotaUsage: ({ limit = 50, offset = 0, userId, period, status } = {}) => {
+    const params = new URLSearchParams({ limit, offset });
+    if (userId) params.set('userId', userId);
+    if (period) params.set('period', period);
+    if (status) params.set('status', status);
+    return request(`/org/quota/usage?${params}`);
+  },
+  setMemberQuotaBatch: items => request('/org/quota/members', { method: 'PUT', body: JSON.stringify({ items }) }),
+  clearMemberQuota: id => request(`/org/members/${encodeURIComponent(id)}/quota/clear`, { method: 'POST' }),
+  revokeOrgQuota: amount => request('/org/quota/revoke', { method: 'POST', body: JSON.stringify({ amount }) }),
   setMemberQuota: (id, amount) => request(`/org/members/${encodeURIComponent(id)}/quota`, { method: 'PUT', body: JSON.stringify({ amount }) }),
   health: () => request('/health'),
   config: () => request('/config'),
@@ -91,9 +126,13 @@ export const api = {
 
   // 通用文档：scripts / projects / canvases / breakdowns
   list: (kind, limit = 100, projectId) => request(`/documents/${kind}?limit=${limit}${projectId ? `&projectId=${encodeURIComponent(projectId)}` : ''}`),
+  get: (kind, id) => request(`/documents/${kind}/${encodeURIComponent(id)}`),
   create: (kind, body) => request(`/documents/${kind}`, { method: 'POST', body: JSON.stringify(body) }),
   patch: (kind, id, body) => request(`/documents/${kind}/${id}`, { method: 'PATCH', body: JSON.stringify(body) }),
   remove: (kind, id) => request(`/documents/${kind}/${id}`, { method: 'DELETE' }),
+
+  // AI 对话：根据指令改写提示词（有 LLM 走模型，无则规则兜底）
+  rewritePrompt: body => request('/ai/rewrite-prompt', { method: 'POST', body: JSON.stringify(body) }),
 
   // 剧本
   listScripts: projectId => request(`/scripts${projectId ? `?projectId=${encodeURIComponent(projectId)}` : ''}`),
@@ -134,6 +173,9 @@ export const api = {
     if (!response.ok) throw new Error(data?.error || `上传失败（HTTP ${response.status}）`);
     return data;
   },
+  orgReviews: (status = 'all') => request(`/org/reviews?status=${encodeURIComponent(status)}`),
+  submitOrgReview: payload => request('/org/reviews', { method: 'POST', body: JSON.stringify(payload) }),
+  decideOrgReview: (id, action, note = '') => request(`/org/reviews/${encodeURIComponent(id)}/decision`, { method: 'POST', body: JSON.stringify({ action, note }) }),
 };
 
 export const setToken = value => {

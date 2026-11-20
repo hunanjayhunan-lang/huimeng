@@ -44,7 +44,16 @@ app.use('/api', (req, res, next) => {
   req.user = session.user;
   req.role = session.role;
   req.org = session.org;
-  if (session.org.status === 'suspended' && session.role !== 'superadmin') return res.status(403).json({ error: '该组织已暂停使用，请联系平台管理员' });
+  // 暂停/试用到期/归档的组织冻结业务接口（superadmin 代管不受限）
+  const lockedStatus = ['suspended', 'expired', 'archived'];
+  if (lockedStatus.includes(session.org.status) && session.role !== 'superadmin') {
+    const reason = {
+      suspended: '该组织已暂停使用，请联系平台管理员',
+      expired: '该组织试用已到期，请联系平台管理员续费或升级套餐',
+      archived: '该组织已归档，如需恢复请联系平台管理员',
+    }[session.org.status];
+    return res.status(403).json({ error: reason, orgStatus: session.org.status });
+  }
   if (req.path.startsWith('/files/')) {
     const name = decodeURIComponent(req.path.slice('/files/'.length));
     if (name.includes('/') || name.includes('\\') || !canAccessFile(name, session.org.id, session.user.id, session.role)) return res.status(404).json({ error: '文件不存在' });

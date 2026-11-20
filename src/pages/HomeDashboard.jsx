@@ -17,6 +17,16 @@ import { DEMO_PROJECTS, STYLES } from './workspaceDemo.js';
 import './HomeDashboard.css';
 
 const styleName = key => STYLES.find(s => s.key === key)?.name || '';
+const relTime = ts => {
+  if (typeof ts !== 'number') return ts || '刚刚';
+  const min = Math.floor((Date.now() - ts) / 60000);
+  if (min < 1) return '刚刚';
+  if (min < 60) return `${min} 分钟前`;
+  const h = Math.floor(min / 60);
+  if (h < 24) return `${h} 小时前`;
+  const day = Math.floor(h / 24);
+  return day === 1 ? '昨天' : `${day} 天前`;
+};
 const greeting = () => {
   const h = new Date().getHours();
   if (h < 6) return '夜深了';
@@ -56,7 +66,7 @@ export default function HomeDashboard({ user, org, onNavigate, onOpenProject }) 
           statusText: item.statusText || '进行中',
           quotaUsed: item.quotaUsed || 0,
           quotaLimit: item.quotaLimit || 1000,
-          updatedAt: item.updatedAt || '刚刚',
+          updatedAt: relTime(item.updatedAt),
         })));
       }
       settle();
@@ -203,9 +213,9 @@ export default function HomeDashboard({ user, org, onNavigate, onOpenProject }) 
               </div>
             </div>
             <ul className="hd-summary-list">
-              <li><span className="hd-summary-dot done" /><span>完成成片</span><b>{counts.videos} 条</b></li>
-              <li><span className="hd-summary-dot run" /><span>进行中任务</span><b>{counts.tasks} 个</b></li>
-              <li><span className="hd-summary-dot new" /><span>新入库资产</span><b>{counts.assets} 张</b></li>
+              <li><span className="hd-summary-dot done" aria-hidden="true" /><span>完成成片</span><b>{counts.videos} 条</b></li>
+              <li><span className="hd-summary-dot run" aria-hidden="true" /><span>进行中任务</span><b>{counts.tasks} 个</b></li>
+              <li><span className="hd-summary-dot new" aria-hidden="true" /><span>新入库资产</span><b>{counts.assets} 张</b></li>
             </ul>
           </section>
 

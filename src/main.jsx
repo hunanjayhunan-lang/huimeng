@@ -75,11 +75,15 @@ const ADMIN_PATHS = {
   '/admin': '平台概览',
   '/admin/overview': '平台概览',
   '/admin/organizations': '组织管理',
+  '/admin/reviews': '内容审核',
+  '/admin/douyin': '抖音运营',
   '/admin/users': '用户与权限',
   '/admin/usage': '平台用量',
   '/admin/tracing': '调用追踪',
   '/admin/audit': '操作审计',
   '/admin/org/overview': '概览',
+  '/admin/org/reviews': '内容审核',
+  '/admin/org/douyin': '抖音运营',
   '/admin/org/members': '成员管理',
   '/admin/org/quota': '额度分配',
   '/admin/org/projects': '项目管理',
@@ -115,19 +119,30 @@ function App() {
     return DEMO_PROJECTS.find(p => p.id === pid) || null;
   });
   const [expandedProjects, setExpandedProjects] = useState(() => [DEMO_PROJECTS[0].id]);
+  const [sidebarProjects, setSidebarProjects] = useState(DEMO_PROJECTS);
   const [projectsOpen, setProjectsOpen] = useState(true);
   const [creationMode, setCreationMode] = useState('剧本成片');
 
   // 切 tab = pushState：浏览器前进/后退、刷新、直接贴 URL 都能用
   const navigate = useCallback(tab => {
-    setActiveTab(tab);
-    const path = pathForTab(tab);
+    if (typeof tab === 'string' && tab.startsWith('/app/workspace/projects/')) {
+      setActiveTab('工作台');
+      window.history.pushState({ tab: '工作台' }, '', tab);
+      window.scrollTo({ top: 0 });
+      return;
+    }
+    const targetTab = typeof tab === 'string' && tab.startsWith('/')
+      ? (tab === '/app/dashboard' ? '首页' : tab === '/app/workspace' ? '工作台' : isAdminPath(tab) ? '管理' : '首页')
+      : tab;
+    setActiveTab(targetTab);
+    const adminPath = session?.role === 'superadmin' ? '/admin/overview' : session?.role === 'org.reviewer' ? '/admin/org/reviews' : '/admin/org/overview';
+    const path = targetTab === '管理' ? adminPath : pathForTab(targetTab);
     const current = normalizePath(window.location.pathname);
     if (current !== path || window.location.hash) {
-      window.history.pushState({ tab }, '', path);
+      window.history.pushState({ tab: targetTab }, '', path);
     }
     window.scrollTo({ top: 0 });
-  }, []);
+  }, [session?.role]);
 
   const openProjectPage = (tab, project) => {
     setSelectedProject(project);
@@ -140,11 +155,11 @@ function App() {
     if (!token) { setActiveTab('登录'); if (normalizePath(window.location.pathname) !== '/invite') window.history.replaceState({ tab: '登录' }, '', '/login'); setSessionReady(true); return; }
     api.session().then(value => {
       setSession(value);
-      if (value.role === 'superadmin' || value.role === 'org.admin') {
+      if (['superadmin', 'org.admin', 'org.reviewer'].includes(value.role)) {
         if (!normalizePath(window.location.pathname).startsWith('/app')) setActiveTab('管理');
         const current = normalizePath(window.location.pathname);
         if (!current.startsWith('/app') && !isAdminPath(current)) {
-          window.history.replaceState({ tab: '管理' }, '', value.role === 'superadmin' ? '/admin/overview' : '/admin/org/overview');
+          window.history.replaceState({ tab: '管理' }, '', value.role === 'superadmin' ? '/admin/overview' : value.role === 'org.reviewer' ? '/admin/org/reviews' : '/admin/org/overview');
         } else if (value.role === 'org.admin' && current.startsWith('/platform/')) {
           // 普通组织管理员误入平台页面，归一到自家面板
           window.history.replaceState({ tab: '管理' }, '', '/admin/org/overview');
@@ -172,7 +187,20 @@ function App() {
     document.title = `${activeTab} · AI绘梦`;
   }, [activeTab]);
 
-  const isAdmin = session?.role === 'superadmin' || session?.role === 'org.admin';
+  // 侧栏项目树读后端真实项目；失败/为空回退 DEMO_PROJECTS
+  useEffect(() => {
+    if (!session) return undefined;
+    let cancelled = false;
+    api.list('projects', 100)
+      .then(({ items } = {}) => {
+        if (cancelled || !Array.isArray(items) || !items.length) return;
+        setSidebarProjects(items.map(p => ({ id: p.id, name: p.name || p.title || '未命名项目' })));
+      })
+      .catch(() => {});
+    return () => { cancelled = true; };
+  }, [session]);
+
+  const isAdmin = ['superadmin', 'org.admin', 'org.reviewer'].includes(session?.role);
   useEffect(() => { if (sessionReady && activeTab === '管理' && !isAdmin) navigate(session ? '首页' : '登录'); }, [sessionReady, activeTab, isAdmin, session, navigate]);
   useEffect(() => { if (sessionReady && session && activeTab === '登录') navigate(isAdmin ? '管理' : '首页'); }, [sessionReady, session, activeTab, isAdmin, navigate]);
   if (!sessionReady) return <div className="auth-loading">正在验证登录状态…</div>;
@@ -180,12 +208,12 @@ function App() {
     const role = value.role || value.org?.role || 'org.user';
     const authenticated = { ...value, role };
     setSession(authenticated);
-    navigate(role === 'superadmin' || role === 'org.admin' ? '管理' : '首页');
+    navigate(['superadmin', 'org.admin', 'org.reviewer'].includes(role) ? '管理' : '首页');
   }} />;
   if (activeTab === '登录') return <AuthPage onAuthenticated={value => {
     const role = value.role || value.org?.role || 'org.user';
     setSession({ ...value, role });
-    navigate(role === 'superadmin' || role === 'org.admin' ? '管理' : '首页');
+    navigate(['superadmin', 'org.admin', 'org.reviewer'].includes(role) ? '管理' : '首页');
   }} />;
   const logout = async () => { try { await api.logout(); } catch { /* 本地退出仍应可用 */ } finally { setToken(''); setSession(null); navigate('登录'); } };
   if (isAdmin && activeTab === '管理') return <div className="app-shell admin-shell">{session.role === 'superadmin'
@@ -215,7 +243,7 @@ function App() {
             <span>Projects</span>
             {projectsOpen ? <ChevronDown size={13} /> : <ChevronRight size={13} />}
           </button>
-          {projectsOpen && DEMO_PROJECTS.map(proj => {
+          {projectsOpen && sidebarProjects.map(proj => {
             const expanded = expandedProjects.includes(proj.id);
             const isProjActive = selectedProject?.id === proj.id;
             const toggleProj = () => setExpandedProjects(list => (
@@ -274,6 +302,7 @@ function App() {
         </div>
       }
       breadcrumbParent="工作台"
+      breadcrumbCurrent={activeTab === '工作台' && selectedProject ? selectedProject.name : undefined}
       user={session.user}
       org={session.org}
       role={session.role}
@@ -293,7 +322,7 @@ function App() {
           onNavigate={navigate}
         />
 ) : activeTab === '工作台' ? (
-        <WorkspacePage onNavigate={navigate} role={session.role} />
+        <WorkspacePage onNavigate={navigate} role={session.role} projectId={selectedProject?.id} />
       ) : activeTab === '创作' ? (
         <CreateWorkbench mode={creationMode} projectId={selectedProject?.id} projectName={selectedProject?.name} onModeChange={setCreationMode} onOpenScripts={() => navigate('剧本')} />
       ) : activeTab === '成片' ? (
@@ -309,8 +338,10 @@ function App() {
         /* 剧本：剧本库空状态 / 列表 + 上传弹窗 */
         <ScriptsPage
           projectId={selectedProject?.id}
-          onOpenShots={(pid = 'proj-rain-alley') => {
-            const target = `/app/workspace/projects/${encodeURIComponent(pid)}?openScript=1`;
+          onOpenShots={(pid = 'proj-rain-alley', scriptId) => {
+            const params = new URLSearchParams({ openScript: '1' });
+            if (scriptId) params.set('script', scriptId);
+            const target = `/app/workspace/projects/${encodeURIComponent(pid)}?${params.toString()}`;
             window.history.pushState({ tab: '工作台' }, '', target);
             setActiveTab('工作台');
           }}

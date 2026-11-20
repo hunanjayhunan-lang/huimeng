@@ -1,18 +1,22 @@
 import { useCallback, useEffect, useMemo, useState } from 'react';
 import {
-  Activity, ArrowRight, Building2, Check, ChevronDown, Clock3, Cpu, Gauge,
+  Activity, ArrowRight, BarChart3, Building2, Check, CheckCircle2, ChevronDown, Clock3, Cpu, Gauge,
   HardDrive, Mail, Plus, Search, Settings, ShieldCheck, Users, Video, Wallet, X,
 } from 'lucide-react';
 import { api } from '../api.js';
 import AdminWorkspace, { EmptyState, ErrorBanner, PanelHeading, Toast, useToast } from '../components/AdminWorkspace.jsx';
+import DouyinOpsPanel from '../components/DouyinOpsPanel.jsx';
+import MemberReviewPanel from '../components/MemberReviewPanel.jsx';
 import TracingPage from './TracingPage.jsx';
 import './AdminPage.css';
 
 const TABS = [
   { key: 'overview', label: '概览', icon: Activity },
+  { key: 'reviews', label: '内容审核', icon: CheckCircle2 },
   { key: 'members', label: '成员管理', icon: Users },
   { key: 'quota', label: '积分分配', icon: Wallet },
   { key: 'projects', label: '项目管理', icon: Video },
+  { key: 'douyin', label: '抖音运营', icon: BarChart3 },
   { key: 'usage', label: '用量与任务', icon: HardDrive },
   { key: 'tracing', label: '调用追踪', icon: Cpu },
   { key: 'audit', label: '审计记录', icon: ShieldCheck },
@@ -20,9 +24,11 @@ const TABS = [
 ];
 const TAB_PATHS = {
   overview: '/admin/org/overview',
+  reviews: '/admin/org/reviews',
   members: '/admin/org/members',
   quota: '/admin/org/quota',
   projects: '/admin/org/projects',
+  douyin: '/admin/org/douyin',
   usage: '/admin/org/usage',
   tracing: '/admin/org/tracing',
   audit: '/admin/org/audit',
@@ -32,7 +38,7 @@ const PATH_TABS = Object.fromEntries(Object.entries(TAB_PATHS).map(([key, path])
 
 const avatarColors = ['teal', 'rose', 'blue', 'gold'];
 const count = value => Number(value || 0).toLocaleString('zh-CN');
-const ROLE_NAME = { 'org.admin': '组织管理员', 'org.user': '组织成员' };
+const ROLE_NAME = { 'org.admin': '组织管理员', 'org.reviewer': '审核员', 'org.user': '组织成员' };
 const projectProgress = project => Math.round(((project.stages || []).filter(Boolean).length / 3) * 100);
 const projectStatus = project => (project.status === 'review' ? '待审核' : projectProgress(project) === 100 ? '已完成' : '进行中');
 const projectUpdated = project => new Date(project.updatedAt || project.createdAt || Date.now()).toLocaleString('zh-CN');
@@ -44,7 +50,8 @@ const tabFromPath = () => {
 };
 
 export default function AdminPage({ org, user, role = 'org.admin', onLogout, onNavigate }) {
-  const [tab, setTab] = useState(tabFromPath);
+  const isReviewer = role === 'org.reviewer';
+  const [tab, setTab] = useState(() => (isReviewer ? 'reviews' : tabFromPath()));
   const [toast, showToast] = useToast();
   const [error, setError] = useState('');
   const [profile, setProfile] = useState(null);
@@ -57,33 +64,35 @@ export default function AdminPage({ org, user, role = 'org.admin', onLogout, onN
   }, []);
 
   useEffect(() => {
-    const onPop = () => setTab(tabFromPath());
+    const onPop = () => setTab(isReviewer ? 'reviews' : tabFromPath());
     window.addEventListener('popstate', onPop);
     return () => window.removeEventListener('popstate', onPop);
-  }, []);
+  }, [isReviewer]);
 
   const loadProfile = useCallback(async () => {
+    if (isReviewer) return;
     try {
       const [data, members] = await Promise.all([api.orgProfile(), api.orgMembers()]);
       setProfile(data);
       setMemberCount(members.items.length);
       setError('');
     } catch (err) { setError(err.message); }
-  }, []);
+  }, [isReviewer]);
 
   useEffect(() => { loadProfile(); }, [loadProfile]);
 
-  const tabsWithBadge = TABS.map(item => (item.key === 'members' && memberCount != null ? { ...item, badge: memberCount } : item));
+  const visibleTabs = isReviewer ? TABS.filter(item => item.key === 'reviews') : TABS;
+  const tabsWithBadge = visibleTabs.map(item => (item.key === 'members' && memberCount != null ? { ...item, badge: memberCount } : item));
 
   return (
     <AdminWorkspace
       workspaceIcon={Building2}
       workspaceTitle={profile?.name || org?.name || '组织'}
-      workspaceSubtitle="组织工作空间"
+      workspaceSubtitle={isReviewer ? '内容审核台' : '组织工作空间'}
       tabs={tabsWithBadge}
       activeTab={tab}
       onTabChange={changeTab}
-      breadcrumbParent={profile?.name || org?.name || '组织管理'}
+      breadcrumbParent={profile?.name || org?.name || (isReviewer ? '内容审核' : '组织管理')}
       user={user}
       org={org}
       role={role}
@@ -91,18 +100,20 @@ export default function AdminPage({ org, user, role = 'org.admin', onLogout, onN
       onNavigate={onNavigate}
       statusText={profile?.status === 'suspended' ? '组织已停用' : '组织运行正常'}
       statusOk={profile?.status !== 'suspended'}
-      searchPlaceholder="搜索成员、项目或审计记录…"
+      searchPlaceholder={isReviewer ? '搜索审核内容…' : '搜索成员、项目或审计记录…'}
     >
       <ErrorBanner message={error} onRetry={loadProfile} />
 
-      {tab === 'overview' && <Overview profile={profile} memberCount={memberCount} onNavigate={changeTab} onToast={showToast} />}
-      {tab === 'members' && <Members onToast={showToast} onChanged={loadProfile} />}
-      {tab === 'quota' && <Quota onToast={showToast} />}
-      {tab === 'projects' && <Projects onToast={showToast} />}
-      {tab === 'usage' && <Usage />}
-      {tab === 'tracing' && <TracingPage />}
-      {tab === 'audit' && <Audit />}
-      {tab === 'settings' && <SettingsTab profile={profile} onToast={showToast} onSaved={loadProfile} />}
+      {!isReviewer && tab === 'overview' && <Overview profile={profile} memberCount={memberCount} onNavigate={changeTab} onToast={showToast} />}
+      {tab === 'reviews' && <MemberReviewPanel onNotify={showToast} onOpenCanvas={url => onNavigate?.(url)} />}
+      {!isReviewer && tab === 'members' && <Members onToast={showToast} onChanged={loadProfile} />}
+      {!isReviewer && tab === 'quota' && <Quota onToast={showToast} />}
+      {!isReviewer && tab === 'projects' && <Projects onToast={showToast} />}
+      {!isReviewer && tab === 'douyin' && <DouyinOpsPanel onNotify={showToast} />}
+      {!isReviewer && tab === 'usage' && <Usage />}
+      {!isReviewer && tab === 'tracing' && <TracingPage />}
+      {!isReviewer && tab === 'audit' && <Audit />}
+      {!isReviewer && tab === 'settings' && <SettingsTab profile={profile} onToast={showToast} onSaved={loadProfile} />}
 
       <Toast message={toast} />
     </AdminWorkspace>
@@ -259,7 +270,8 @@ function Members({ onToast, onChanged }) {
 
   useEffect(() => { refresh(); }, [refresh]);
 
-  const roleFilter = member => role === '全部角色' || member.role === (role === '组织管理员' ? 'org.admin' : 'org.user');
+  const roleMap = { 组织管理员: 'org.admin', 审核员: 'org.reviewer', 组织成员: 'org.user' };
+  const roleFilter = member => role === '全部角色' || member.role === roleMap[role];
   const matches = value => value.email.toLowerCase().includes(query.toLowerCase()) && roleFilter(value);
   const filtered = members.filter(matches);
   const filteredInvites = invites.filter(matches);
@@ -311,7 +323,7 @@ function Members({ onToast, onChanged }) {
         <div className="admin-toolbar">
           <label className="admin-search"><Search size={17} /><input value={query} onChange={event => setQuery(event.target.value)} placeholder="搜索邮箱" /></label>
           <select value={role} onChange={event => setRole(event.target.value)} aria-label="筛选成员角色">
-            <option>全部角色</option><option>组织管理员</option><option>组织成员</option>
+            <option>全部角色</option><option>组织管理员</option><option>审核员</option><option>组织成员</option>
           </select>
           <span className="table-total">{loading ? '正在加载…' : `共 ${filtered.length} 位成员 · ${filteredInvites.length} 个待接受邀请`}</span>
         </div>
@@ -326,6 +338,7 @@ function Members({ onToast, onChanged }) {
               </div>
               <select aria-label={`${member.email}的角色`} value={member.role} onChange={event => changeRole(member, event.target.value)}>
                 <option value="org.admin">组织管理员</option>
+                <option value="org.reviewer">审核员</option>
                 <option value="org.user">组织成员</option>
               </select>
               <span className="invite-status">已加入</span>
@@ -366,6 +379,7 @@ function Members({ onToast, onChanged }) {
             <label>加入后角色
               <select value={inviteRole} onChange={event => setInviteRole(event.target.value)}>
                 <option value="org.user">组织成员</option>
+                <option value="org.reviewer">审核员</option>
                 <option value="org.admin">组织管理员</option>
               </select>
             </label>
@@ -386,12 +400,24 @@ function Members({ onToast, onChanged }) {
 function Quota({ onToast }) {
   const [quota, setQuota] = useState(null);
   const [edits, setEdits] = useState({});
+  const [selected, setSelected] = useState([]);
+  const [batchAmount, setBatchAmount] = useState('');
+  const [usage, setUsage] = useState(null);
+  const [usagePage, setUsagePage] = useState(1);
+  const [tab, setTab] = useState('allocate');
 
   const refresh = useCallback(async () => {
     try { setQuota(await api.orgQuota()); } catch (err) { onToast(err.message); }
   }, [onToast]);
 
   useEffect(() => { refresh(); }, [refresh]);
+
+  const loadUsage = useCallback(async page => {
+    try { setUsage(await api.orgQuotaUsage({ limit: 20, offset: (page - 1) * 20 })); }
+    catch (err) { onToast(err.message); }
+  }, [onToast]);
+
+  useEffect(() => { if (tab === 'usage') loadUsage(usagePage); }, [tab, usagePage, loadUsage]);
 
   const save = async member => {
     const amount = Number(edits[member.id] ?? member.allocation);
@@ -402,44 +428,136 @@ function Quota({ onToast }) {
     } catch (err) { onToast(err.message); }
   };
 
+  const clearOne = async member => {
+    try {
+      setQuota(await api.clearMemberQuota(member.id));
+      onToast(`${member.email} 的额度已清零`);
+    } catch (err) { onToast(err.message); }
+  };
+
+  const batchAssign = async () => {
+    const amount = Number(batchAmount);
+    if (!selected.length) return onToast('先选中要分配的成员');
+    if (!Number.isInteger(amount) || amount < 0) return onToast('请输入有效的积分数');
+    try {
+      setQuota(await api.setMemberQuotaBatch(selected.map(userId => ({ userId, amount }))));
+      onToast(`已批量分配给 ${selected.length} 位成员各 ${amount} 积分`);
+      setSelected([]);
+      setBatchAmount('');
+    } catch (err) { onToast(err.message); }
+  };
+
+  const revoke = async () => {
+    if (!quota) return;
+    const input = window.prompt(`回收多少积分？（当前最多可回收 ${quota.remaining} 点）`);
+    if (!input) return;
+    try {
+      setQuota(await api.revokeOrgQuota(Number(input)));
+      onToast('组织额度已回收');
+    } catch (err) { onToast(err.message); }
+  };
+
+  const alerts = quota?.alerts;
+  const alertLevel = alerts?.level;
+  const toggle = id => setSelected(current => current.includes(id) ? current.filter(item => item !== id) : [...current, id]);
+  const usagePages = usage ? Math.max(1, Math.ceil(usage.total / 20)) : 1;
+
   return (
     <>
       <PanelHeading title="积分分配" description="把 Org 本月积分分配给成员">
         <span className="admin-count-label">{quota?.period || '读取中'}</span>
       </PanelHeading>
 
-      <div className="admin-metrics usage-metrics">
-        <Metric icon={Wallet} label="Org 总积分" value={`${count(quota?.granted)} 积分`} note="平台本月划拨" />
-        <Metric icon={Check} label="已消耗积分" value={`${count(quota?.used)} 积分`} note={`实际花费 ¥${Number(quota?.costCny || 0).toFixed(2)}`} />
-        <Metric icon={Activity} label="执行中预占" value={`${count(quota?.reserved)} 积分`} note="失败或取消会退还" />
-        <Metric icon={Users} label="未分配积分" value={`${count(quota?.unallocated)} 积分`} note="留在 Org 积分池" />
+      {alertLevel && alertLevel !== 'ok' && (
+        <div className={`admin-card`} style={{ padding: '10px 14px', marginBottom: 12, borderLeft: `3px solid ${alertLevel === 'warn' ? '#c08a35' : '#c0504d'}` }}>
+          <b>{alertLevel === 'warn' ? '额度预警' : '额度告急'}</b>
+          <span style={{ marginLeft: 8 }}>
+            本月剩余 {count(alerts.remaining)} / {count(alerts.granted)} 点（{(alerts.ratio * 100).toFixed(1)}%），请尽快划拨或回收调整。
+          </span>
+        </div>
+      )}
+
+      <div className="org-toolbar" style={{ marginBottom: 12 }}>
+        <button type="button" className={tab === 'allocate' ? 'admin-primary' : 'admin-outline'} onClick={() => setTab('allocate')}>成员分配</button>
+        <button type="button" className={tab === 'usage' ? 'admin-primary' : 'admin-outline'} onClick={() => setTab('usage')}>对账明细</button>
+        <button type="button" className="admin-outline" onClick={revoke}>回收额度</button>
+        <button type="button" className="admin-outline" onClick={() => window.open('/api/org/quota/export', '_blank')}>导出 CSV</button>
       </div>
 
-      <article className="admin-card quota-allocation-card">
-        <div className="quota-table-head"><span>成员</span><span>已分配</span><span>已用</span><span>实际花费</span><span>预占</span><span>可用</span><span>设置积分</span></div>
-        {(quota?.members || []).map(member => (
-          <div className="quota-member-row" key={member.id}>
-            <span className="member-info"><b>{member.email}</b><small>{ROLE_NAME[member.role]}</small></span>
-            <span>{count(member.allocation)}</span>
-            <span>{count(member.used)}</span>
-            <span className="quota-cost">¥{Number(member.costCny || 0).toFixed(2)}</span>
-            <span>{count(member.reserved)}</span>
-            <b>{count(member.available)}</b>
-            <span className="quota-edit">
-              <input
-                type="number"
-                min={member.used + member.reserved}
-                step="1"
-                value={edits[member.id] ?? member.allocation}
-                onChange={event => setEdits(current => ({ ...current, [member.id]: event.target.value }))}
-              />
-              <button type="button" className="admin-primary" onClick={() => save(member)}>保存</button>
-            </span>
+      {tab === 'allocate' ? (
+        <>
+          <div className="admin-metrics usage-metrics">
+            <Metric icon={Wallet} label="Org 总积分" value={`${count(quota?.granted)} 积分`} note="平台本月划拨" />
+            <Metric icon={Check} label="已消耗积分" value={`${count(quota?.used)} 积分`} note={`实际花费 ¥${Number(quota?.costCny || 0).toFixed(2)}`} />
+            <Metric icon={Activity} label="执行中预占" value={`${count(quota?.reserved)} 积分`} note="失败或取消会退还" />
+            <Metric icon={Users} label="未分配积分" value={`${count(quota?.unallocated)} 积分`} note="留在 Org 积分池" />
           </div>
-        ))}
-        {!quota?.members?.length && <EmptyState title="当前组织还没有成员" description="邀请成员加入后即可分配积分。" />}
-        <div className="table-foot">图片任务预占 1 积分，视频任务预占 8 积分；完成后按真实成本结算（视频随 token 波动），失败或取消自动退还。LLM 调用每 1000 tokens 计 1 积分。积分按自然月重置。</div>
-      </article>
+
+          {selected.length > 0 && (
+            <div className="admin-card" style={{ padding: '10px 14px', marginBottom: 12, display: 'flex', gap: 10, alignItems: 'center' }}>
+              <b>已选 {selected.length} 人</b>
+              <input type="number" min="0" step="1" value={batchAmount} onChange={event => setBatchAmount(event.target.value)} placeholder="每人积分" style={{ width: 120 }} />
+              <button type="button" className="admin-primary" onClick={batchAssign}>批量分配</button>
+              <button type="button" className="admin-outline" onClick={() => setSelected([])}>取消选择</button>
+            </div>
+          )}
+
+          <article className="admin-card quota-allocation-card">
+            <div className="quota-table-head">
+              <span><input type="checkbox" checked={!!quota?.members?.length && selected.length === quota.members.length} onChange={event => setSelected(event.target.checked ? (quota?.members || []).map(item => item.id) : [])} aria-label="全选" /></span>
+              <span>成员</span><span>已分配</span><span>已用</span><span>实际花费</span><span>预占</span><span>可用</span><span>设置积分</span>
+            </div>
+            {(quota?.members || []).map(member => (
+              <div className="quota-member-row" key={member.id}>
+                <span><input type="checkbox" checked={selected.includes(member.id)} onChange={() => toggle(member.id)} aria-label={`选择 ${member.email}`} /></span>
+                <span className="member-info"><b>{member.email}</b><small>{ROLE_NAME[member.role]}</small></span>
+                <span>{count(member.allocation)}</span>
+                <span>{count(member.used)}</span>
+                <span className="quota-cost">¥{Number(member.costCny || 0).toFixed(2)}</span>
+                <span>{count(member.reserved)}</span>
+                <b>{count(member.available)}</b>
+                <span className="quota-edit">
+                  <input
+                    type="number"
+                    min={member.used + member.reserved}
+                    step="1"
+                    value={edits[member.id] ?? member.allocation}
+                    onChange={event => setEdits(current => ({ ...current, [member.id]: event.target.value }))}
+                  />
+                  <button type="button" className="admin-primary" onClick={() => save(member)}>保存</button>
+                  <button type="button" className="admin-outline" onClick={() => clearOne(member)} title="清零额度">清零</button>
+                </span>
+              </div>
+            ))}
+            {!quota?.members?.length && <EmptyState title="当前组织还没有成员" description="邀请成员加入后即可分配积分。" />}
+            <div className="table-foot">图片任务预占 1 积分，视频任务预占 8 积分；完成后按真实成本结算（视频随 token 波动），失败或取消自动退还。LLM 调用每 1000 tokens 计 1 积分。积分按自然月重置。</div>
+          </article>
+        </>
+      ) : (
+        <article className="admin-card member-table-card">
+          <div className="admin-table">
+            <div className="table-head"><span>成员</span><span>期间</span><span>积分</span><span>状态</span><span>实际成本</span><span>结算时间</span></div>
+            {(usage?.items || []).map(row => (
+              <div className="table-row" key={row.taskId}>
+                <span>{row.userEmail || '—'}</span>
+                <span>{row.period}</span>
+                <b>{row.amount}</b>
+                <span>{row.status === 'settled' ? '已结算' : row.status === 'reserved' ? '预占中' : '已释放'}</span>
+                <span>¥{Number(row.costCny || 0).toFixed(4)}</span>
+                <span>{row.settledAt || row.createdAt ? new Date(row.settledAt || row.createdAt).toLocaleString('zh-CN') : '—'}</span>
+              </div>
+            ))}
+            {!usage?.items?.length && <EmptyState title="暂无额度使用记录" description="成员生成任务后会在这里产生明细。" />}
+          </div>
+          {usagePages > 1 && (
+            <footer className="org-pagination">
+              <span>第 {usagePage} / {usagePages} 页 · 共 {usage?.total || 0} 条</span>
+              <button type="button" disabled={usagePage <= 1} onClick={() => setUsagePage(p => p - 1)}>上一页</button>
+              <button type="button" disabled={usagePage >= usagePages} onClick={() => setUsagePage(p => p + 1)}>下一页</button>
+            </footer>
+          )}
+        </article>
+      )}
     </>
   );
 }
@@ -567,19 +685,49 @@ const orgActionLabel = action => ORG_ACTION_LABELS[action] || String(action || '
 
 function Audit() {
   const [items, setItems] = useState([]);
+  const [total, setTotal] = useState(0);
+  const [actions, setActions] = useState([]);
   const [error, setError] = useState('');
+  const [q, setQ] = useState('');
+  const [action, setAction] = useState('');
+  const [page, setPage] = useState(1);
+  const PAGE_SIZE = 20;
 
   const load = useCallback(async () => {
-    try { const data = await api.orgAudit(200); setItems(data.items || []); setError(''); }
-    catch (err) { setError(err.message); }
-  }, []);
+    try {
+      const data = await api.orgAudit({ limit: PAGE_SIZE, offset: (page - 1) * PAGE_SIZE, action: action || undefined, q: q.trim() || undefined });
+      setItems(data.items || []);
+      setTotal(data.total || 0);
+      setActions(data.actions || []);
+      setError('');
+    } catch (err) { setError(err.message); }
+  }, [page, action, q]);
 
   useEffect(() => { load(); }, [load]);
+  useEffect(() => { setPage(1); }, [action, q]);
+
+  const pages = Math.max(1, Math.ceil(total / PAGE_SIZE));
+  const exportCsv = () => {
+    // 导出走浏览器下载：Cookie 会话已存在，直接打开即可
+    const params = new URLSearchParams();
+    if (action) params.set('action', action);
+    if (q.trim()) params.set('q', q.trim());
+    window.open(`/api/org/audit/export${params.size ? `?${params}` : ''}`, '_blank');
+  };
 
   return (
     <>
       <PanelHeading title="管理操作审计" description="记录邀请、角色调整、积分分配与成员移除" />
       <ErrorBanner message={error} onRetry={load} />
+      <div className="org-toolbar" style={{ marginBottom: 12 }}>
+        <label><Search size={15} /><input value={q} onChange={event => setQ(event.target.value)} placeholder="搜索对象、动作、操作人" /></label>
+        <select value={action} onChange={event => setAction(event.target.value)} aria-label="筛选操作类型">
+          <option value="">全部操作</option>
+          {actions.map(item => <option key={item} value={item}>{orgActionLabel(item)}</option>)}
+        </select>
+        <button type="button" className="admin-outline" onClick={exportCsv}>导出 CSV</button>
+        <span>共 {total} 条</span>
+      </div>
       <div className="admin-card member-table-card">
         <div className="admin-table">
           <div className="table-head audit-head-row"><span>操作</span><span>操作人</span><span>对象</span><span>时间</span></div>
@@ -593,6 +741,13 @@ function Audit() {
           ))}
           {!items.length && <EmptyState title="暂无管理操作记录" description="邀请成员、调整角色等操作会记录在这里。" />}
         </div>
+        {pages > 1 && (
+          <footer className="org-pagination">
+            <span>第 {page} / {pages} 页</span>
+            <button type="button" disabled={page <= 1} onClick={() => setPage(p => p - 1)}>上一页</button>
+            <button type="button" disabled={page >= pages} onClick={() => setPage(p => p + 1)}>下一页</button>
+          </footer>
+        )}
       </div>
     </>
   );
